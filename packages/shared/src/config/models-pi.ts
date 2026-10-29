@@ -91,13 +91,20 @@ export function getPiModelsForAuthProvider(piAuthProvider: string): ModelDefinit
   try {
     const models = getModels(toPiProviderId(piAuthProvider) as Parameters<typeof getModels>[0]);
     if (models.length > 0) {
-      return models
+      const definitions = models
         .filter(m => !isExcludedPiModel(m.id))
         // Bedrock: exclude bare Claude models without region prefix — they're
         // always rejected by Bedrock which requires inference profiles (us.*/eu.*/global.*).
         // Regional variants from the same catalog are kept.
         .filter(m => piAuthProvider !== 'amazon-bedrock' || !isBareBedrockClaudeModel(m.id))
         .map(piModelToDefinition);
+      // Additive bridge matching pi-agent-server/src/terra-model.ts until the SDK catalog catches up.
+      if (piAuthProvider === 'openai-codex' && !definitions.some(m => m.id === 'pi/gpt-6.1-terra')) {
+        definitions.push({ id: 'pi/gpt-6.1-terra', name: 'GPT-6.1 Terra', shortName: 'GPT-6.1 Terra',
+          description: 'openai-codex model via Craft Agents Backend', provider: 'pi',
+          contextWindow: 500000, supportsThinking: true });
+      }
+      return definitions;
     }
   } catch {
     // Provider not recognized by SDK — fall through
@@ -121,6 +128,8 @@ export function getAllPiModels(): ModelDefinition[] {
       // Skip providers that fail
     }
   }
+  const terra = getPiModelsForAuthProvider('openai-codex').find(m => m.id === 'pi/gpt-6.1-terra');
+  if (terra && !allModels.some(m => m.id === terra.id)) allModels.push(terra);
   return allModels;
 }
 

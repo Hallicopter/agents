@@ -3,6 +3,7 @@ import type { LLMQueryResult } from '../../shared/src/agent/llm-tool.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
 import { PI_PREFERRED_DEFAULTS } from '../../shared/src/config/llm-connections.ts';
 import { stripPiPrefix } from './custom-endpoint-models.ts';
+import { requiresExactModel } from './terra-model.ts';
 import { isDeniedMiniModelId, isModelRejectionError, resolvePiModel } from './model-resolution.ts';
 
 interface MiniModelQueryOptions {
@@ -43,6 +44,7 @@ export async function queryMiniModel(
       const text = await runQuery(currentModel);
       return { text, model: currentModel };
     } catch (error) {
+      if (requiresExactModel(options.model)) throw error;
       const message = error instanceof Error ? error.message : String(error);
       if (!isModelRejectionError(message, stripPiPrefix(currentModel))) throw error;
 

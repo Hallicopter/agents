@@ -67,6 +67,7 @@ registerBunOAuthFlows();
 import { resolvePiModel, isDeniedMiniModelId } from './model-resolution.ts';
 import { pickProviderAppropriateMiniModel } from './pick-mini-model.ts';
 import { queryMiniModel } from './mini-model-query.ts';
+import { registerTerraModel, requiresExactModel, verifyTerraResponse } from './terra-model.ts';
 import {
   CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS,
   createCraftSettingsManager,
@@ -577,6 +578,7 @@ async function createAuthenticatedRuntime(): Promise<{
         modelsStore: new InMemoryModelsStore(),
       });
       const modelRegistry = new PiModelRegistry(modelRuntime);
+      registerTerraModel(modelRegistry);
 
       // Register custom endpoint models dynamically via Pi SDK's registerProvider API.
       // This makes arbitrary OpenAI/Anthropic-compatible endpoints work through the Pi SDK
@@ -729,6 +731,7 @@ async function ensureSession(): Promise<AgentSession> {
   if (initConfig.model) {
     try {
       const piModel = resolvePiModel(modelRegistry, initConfig.model, initConfig.piAuth?.provider, shouldPreferCustomEndpoint());
+      if (requiresExactModel(initConfig.model)) verifyTerraResponse(piModel?.id, piModel?.provider);
       if (piModel) {
         // Verify resolved model's provider is compatible with the authenticated provider.
         // Without this, a model that resolves to a different provider (e.g. azure
@@ -747,7 +750,8 @@ async function ensureSession(): Promise<AgentSession> {
       } else {
         setInterceptorApiHints(undefined);
       }
-    } catch {
+    } catch (error) {
+      if (requiresExactModel(initConfig.model)) throw error;
       debugLog(`Could not resolve Pi model: ${initConfig.model}`);
       setInterceptorApiHints(undefined);
     }
@@ -774,6 +778,13 @@ async function ensureSession(): Promise<AgentSession> {
 
   // Create the session — tools flow through customTools + allowlist (see comment above).
   const { session } = await createAgentSession(sessionOptions);
+  if (requiresExactModel(initConfig.model)) {
+    try {
+      if (!sessionOptions.model) throw new Error('Exact Terra model was not resolved');
+      await session.setModel(sessionOptions.model);
+      verifyTerraResponse(session.model?.id, session.model?.provider);
+    } catch (error) { session.dispose(); throw error; }
+  }
   piSession = session;
   piSessionPromptOverride = systemPromptOverride;
 
@@ -1030,6 +1041,7 @@ async function queryLlm(
     const resolved = resolvePiModel(modelRegistry, bareModel, authProvider, shouldPreferCustomEndpoint());
     const resolvedProvider = (resolved as any)?.provider;
     const isCompatible = resolvedProvider === authProvider || resolvedProvider === 'custom-endpoint';
+    if (requiresExactModel(model)) verifyTerraResponse(resolved?.id, resolved?.provider);
     if (!resolved || !isCompatible || isDeniedMiniModelId(model, piAuthProvider)) {
       // Anthropic: keep Haiku (the cheap/fast mini). For every other provider
       // Haiku is unresolvable, so walk PI_PREFERRED_DEFAULTS for a model that
@@ -1093,9 +1105,11 @@ async function queryLlm(
       // Explicitly set the model after creation to ensure the mini model is used.
       try {
         await ephemeralSession.setModel(piModel);
-      } catch {
+      } catch (error) {
+        if (requiresExactModel(modelId)) throw error;
         debugLog(`[queryLlm] Failed to set model on ephemeral session, proceeding with default`);
       }
+      if (requiresExactModel(modelId)) verifyTerraResponse(ephemeralSession.model?.id, ephemeralSession.model?.provider);
       lifecycle.throwIfCancelled();
 
       debugLog(`[queryLlm] Created ephemeral session: ${ephemeralSession.sessionId}`);
@@ -1118,11 +1132,17 @@ async function queryLlm(
         // Only capture assistant messages — Pi SDK emits message_end for user messages too.
         const msg = event.message as {
           role?: string;
+          model?: string;
+          provider?: string;
           content?: string | Array<{ type: string; text?: string }>;
           stopReason?: string;
           errorMessage?: string;
         };
         if (msg.role !== 'assistant') return;
+        if (requiresExactModel(modelId)) {
+          try { verifyTerraResponse(msg.model, msg.provider); }
+          catch (error) { lastError = String(error); return; }
+        }
 
         // Capture API errors from message_end (e.g. auth failures, model errors).
         if (msg.stopReason === 'error' && msg.errorMessage) {
@@ -1146,7 +1166,7 @@ async function queryLlm(
       debugLog(`[queryLlm] Result length: ${result.trim().length}`);
 
       // If we got no text but captured an error, throw so callers see the real issue.
-      if (!result.trim() && lastError) {
+      if (lastError && (requiresExactModel(modelId) || !result.trim())) {
         throw new Error(lastError);
       }
 
