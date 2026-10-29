@@ -8,6 +8,44 @@
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 [![Discord](https://img.shields.io/badge/Discord-Come%20join%20our%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/bwskSM82p)
 
+## Hallicopter fork
+
+This is [Hallicopter/agents](https://github.com/Hallicopter/agents), a maintained fork of [Craft Agents](https://github.com/lukilabs/craft-agents-oss). The current upstream baseline is **v0.15.6** (`8df01c5d`). Upstream history and documentation are retained below.
+
+### Changes from upstream
+
+- **Terra compatibility:** adds `gpt-6.1-terra` to the Pi Codex catalog when absent, preserving existing models and OAuth. Explicit Terra requests fail instead of silently falling back to another model; runtime model/provider checks and mini-query response attribution checks enforce the selection. Existing SDK definitions take precedence over the temporary bridge.
+- **Runtime cleanup:** disposes managed agent runtimes after processing completes, during session deletion, and during manager cleanup, releasing associated resources.
+- **Optional workspace watcher switch:** `CRAFT_DISABLE_WORKSPACE_CONFIG_WATCHER=1` disables the SessionManager workspace ConfigWatcher. Accepted true values are `1`, `true`, `yes`, and `on`. This sacrifices automatic workspace configuration refresh through that watcher; it does not disable every watcher in the application. Automations still initialize.
+
+The separate Elm OS/multi-user checkout is not part of this fork. Workspace sessions, skills, credentials, `.env`, and host service configuration are deployment data and are not published here.
+
+### Maintaining this fork
+
+Use `origin` for `https://github.com/Hallicopter/agents.git` and `upstream` for `https://github.com/lukilabs/craft-agents-oss.git`. Keep fork changes as focused commits on `main`, and merge upstream releases without rewriting published history:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git fetch upstream --tags
+# Replace VERSION with the selected upstream release tag.
+git merge VERSION
+bun install --frozen-lockfile
+bun test packages/pi-agent-server/src/terra-model.test.ts
+bun run --cwd packages/pi-agent-server typecheck
+bun run server:build:subprocess
+bun run webui:build
+# Update the baseline and customization notes above, then commit and push.
+git push origin main
+```
+
+Before deployment, back up application and workspace data; validate any changed areas beyond these baseline checks. Restart the service after building, then verify login, WebSocket connectivity, and a streamed test response. Git synchronization alone does not deploy a running service. Remove compatibility patches when upstream provides equivalent behavior.
+
+### Operational notes and known issues
+
+- The Linux host previously exhausted its inotify watch capacity. Its limits were raised to `fs.inotify.max_user_watches=1048576` and `fs.inotify.max_user_instances=1024`. These are host settings, not application defaults or a fix for excessive recursive watching.
+- **Session persistence remains an upstream issue in this baseline:** save paths unlink the existing `session.jsonl` before renaming its temporary replacement, while session listing removes `.tmp` files. A failed rename can leave the session record missing. This fork does not yet include a persistence repair; retain independent backups of session data. Recovery of existing sessions is separate from fixing this code path.
+
 ## How it Works (Video)
 To understand what Craft Agents does and how it works watch this video.
 
