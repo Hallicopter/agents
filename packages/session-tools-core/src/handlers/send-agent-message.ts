@@ -56,7 +56,8 @@ export async function handleSendAgentMessage(
     }
 
     return successResponse(
-      `Message delivered to session ${args.sessionId}; it will start processing independently now.`
+      `Message accepted by session ${args.sessionId}${result.targetBusy ? ' into its active turn' : '; it will start processing independently now'}. ` +
+        `This confirms acceptance, not completion or that it was read; the recipient can report back separately.`
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';

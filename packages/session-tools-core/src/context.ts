@@ -980,7 +980,8 @@ export interface ListSessionsResult {
  */
 export interface SendAgentMessageResult {
   /**
-   * - `delivered`: the target was idle, so it will start processing the message now.
+   * - `delivered`: durably accepted for an idle turn or steered into an active turn.
+   *   This does not mean the recipient has read it or completed its work.
    * - `queued`: the target was mid-turn; the message is enqueued and will be
    *   processed after the current turn finishes.
    */
