@@ -138,6 +138,15 @@ let _platform: PlatformServices | null = null
 // Named `sessionLog` so all ~30 existing call sites remain unchanged.
 let sessionLog: Logger = createScopedLogger(CONSOLE_LOGGER, 'session')
 
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) return false
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase())
+}
+
+function shouldDisableWorkspaceConfigWatcher(): boolean {
+  return isTruthyEnv(process.env.CRAFT_DISABLE_WORKSPACE_CONFIG_WATCHER)
+}
+
 export function setSessionPlatform(platform: PlatformServices): void {
   _platform = platform
   sessionLog = createScopedLogger(platform.logger, 'session')
@@ -2140,7 +2149,12 @@ export class SessionManager implements ISessionManager {
       return // Already watching this workspace
     }
 
+    const disableConfigWatcher = shouldDisableWorkspaceConfigWatcher()
     sessionLog.info(`Setting up ConfigWatcher for workspace: ${workspaceId} (${workspaceRootPath})`)
+
+    if (disableConfigWatcher) {
+      sessionLog.warn(`ConfigWatcher disabled for workspace ${workspaceId} via CRAFT_DISABLE_WORKSPACE_CONFIG_WATCHER`)
+    }
 
     const callbacks: ConfigWatcherCallbacks = {
       onSourcesListChange: async (sources: LoadedSource[]) => {
@@ -2278,9 +2292,11 @@ export class SessionManager implements ISessionManager {
       },
     }
 
-    const watcher = new ConfigWatcher(workspaceRootPath, callbacks)
-    watcher.start()
-    this.configWatchers.set(workspaceRootPath, watcher)
+    if (!disableConfigWatcher) {
+      const watcher = new ConfigWatcher(workspaceRootPath, callbacks)
+      watcher.start()
+      this.configWatchers.set(workspaceRootPath, watcher)
+    }
 
     // Initialize AutomationSystem for this workspace (includes scheduler, handlers, and event logging)
     if (!this.automationSystems.has(workspaceRootPath)) {
@@ -6498,24 +6514,14 @@ export class SessionManager implements ISessionManager {
     this.remoteBpms.delete(sessionId)
     this.browserHostByCanvas.delete(sessionId)
 
-    // Dispose agent to clean up ConfigWatchers, event listeners, MCP connections
-    if (managed.agent) {
-      managed.agent.dispose()
-    }
-
-    // Stop pool server (HTTP MCP server for external SDK subprocesses)
-    if (managed.poolServer) {
-      managed.poolServer.stop().catch(err => {
-        sessionLog.warn(`Failed to stop pool server for ${sessionId}: ${err instanceof Error ? err.message : err}`)
-      })
-    }
-
     // Cancel any pending source-activation auto-retry timer (craft-agents-oss#804).
     if (managed.autoRetryTimer) {
       clearTimeout(managed.autoRetryTimer)
       managed.autoRetryTimer = undefined
     }
     managed.autoRetryPending = undefined
+
+    await this.disposeManagedAgentRuntime(managed, 'session delete')
 
     this.sessions.delete(sessionId)
 
@@ -7651,6 +7657,8 @@ export class SessionManager implements ISessionManager {
         fromUser: managed.turnFromUser !== false,
         tokenUsage: managed.tokenUsage,
       })
+
+      await this.disposeManagedAgentRuntime(managed, `processing ${reason}`)
 
       // Hidden/mini sessions have no status worth changing; task sessions are the Conductor's.
       if (reason === 'complete' && didReceiveNewFinalMessage && currentFinalMessageId
@@ -10292,9 +10300,10 @@ export class SessionManager implements ISessionManager {
     this.pendingPermissionRequests.clear()
     this.adminRememberApprovals.clear()
 
-    // Clean up session-scoped tool callbacks for all sessions
-    for (const sessionId of this.sessions.keys()) {
+    // Clean up session-scoped runtimes and tool callbacks for all sessions
+    for (const [sessionId, managed] of this.sessions) {
       unregisterSessionScopedToolCallbacks(sessionId)
+      void this.disposeManagedAgentRuntime(managed, 'manager cleanup')
     }
 
     sessionLog.info('Cleanup complete')
