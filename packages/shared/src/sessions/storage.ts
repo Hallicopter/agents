@@ -370,12 +370,8 @@ export function listSessions(workspaceRootPath: string): SessionMetadata[] {
       const sessionDir = join(sessionsDir, sessionId);
       const jsonlFile = join(sessionDir, 'session.jsonl');
 
-      // Clean up orphaned .tmp files from crashed atomic writes.
-      // These are harmless but waste disk space.
-      const tmpFile = jsonlFile + '.tmp';
-      if (existsSync(tmpFile)) {
-        try { unlinkSync(tmpFile); } catch { /* ignore */ }
-      }
+      // Listing is read-only: temporary files may belong to an active writer
+      // or be the only recoverable copy after an interrupted save.
 
       if (existsSync(jsonlFile)) {
         const header = readSessionHeader(jsonlFile);

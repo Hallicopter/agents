@@ -1,4 +1,5 @@
-import { writeFile, rename, unlink } from 'fs/promises'
+import { randomUUID } from 'node:crypto'
+import { writeFile, rename } from 'fs/promises'
 import { dirname } from 'path'
 import type { StoredSession, SessionHeader } from './types.js'
 import { getSessionFilePath, ensureSessionsDir, ensureSessionDir } from './storage.js'
@@ -54,7 +55,7 @@ function mergeHeaderWithExternalMetadata(localHeader: SessionHeader, diskHeader:
  *
  * IMPORTANT: Writes are serialized per-session to prevent race conditions
  * when rapid successive flushes (e.g., clearSessionForRecovery + onSdkSessionIdUpdate)
- * would otherwise write to the same .tmp file concurrently.
+ * would otherwise commit stale snapshots out of order.
  */
 class SessionPersistenceQueue {
   private pending = new Map<string, PendingWrite>()
@@ -77,7 +78,7 @@ class SessionPersistenceQueue {
     }
 
     const timer = setTimeout(() => {
-      void this.write(session.id)
+      void this.flush(session.id)
     }, this.debounceMs)
 
     this.pending.set(session.id, { data: session, timer })
@@ -148,16 +149,16 @@ class SessionPersistenceQueue {
       // the original session.jsonl remains intact.
       //
       // Update signature BEFORE the write so that fs.watch events fired
-      // during unlink/rename are correctly identified as self-writes.
+      // during rename are correctly identified as self-writes.
       // Without this, onSessionMetadataChange sees the stale signature
       // and reverts in-memory metadata on idle sessions.
       const finalSignature = getHeaderMetadataSignature(header)
       this.lastWrittenHeaderSignature.set(sessionId, finalSignature)
 
-      const tmpFile = filePath + '.tmp'
+      const tmpFile = `${filePath}.${randomUUID()}.tmp`
       await writeFile(tmpFile, lines.join('\n') + '\n', 'utf-8')
-      // On Windows, rename fails if target exists. Delete first for cross-platform compatibility.
-      try { await unlink(filePath) } catch { /* ignore if doesn't exist */ }
+      // Never delete the last good copy. A failed rename leaves it intact
+      // and retains the private temporary file for recovery.
       await rename(tmpFile, filePath)
       debug(`[PersistenceQueue] Wrote session ${sessionId}`)
     } catch (error) {
@@ -168,28 +169,22 @@ class SessionPersistenceQueue {
   /**
    * Immediately flush a specific session if pending.
    * Waits for any in-progress write to complete before starting a new one
-   * to prevent race conditions on the shared .tmp file.
+   * to preserve write ordering, including timer-triggered saves.
    */
   async flush(sessionId: string): Promise<void> {
+    // Recheck after every await: another flush may have started a write.
+    while (this.writeInProgress.has(sessionId)) {
+      await this.writeInProgress.get(sessionId)
+    }
     const entry = this.pending.get(sessionId)
-    if (entry) {
-      clearTimeout(entry.timer)
-
-      // Wait for any in-progress write to complete first
-      const inProgress = this.writeInProgress.get(sessionId)
-      if (inProgress) {
-        await inProgress
-      }
-
-      // Start new write and track it
-      const writePromise = this.write(sessionId)
-      this.writeInProgress.set(sessionId, writePromise)
-
-      try {
-        await writePromise
-      } finally {
-        this.writeInProgress.delete(sessionId)
-      }
+    if (!entry) return
+    clearTimeout(entry.timer)
+    const writePromise = this.write(sessionId)
+    this.writeInProgress.set(sessionId, writePromise)
+    try {
+      await writePromise
+    } finally {
+      this.writeInProgress.delete(sessionId)
     }
   }
 
@@ -210,7 +205,7 @@ class SessionPersistenceQueue {
    * Flush all pending sessions. Call this on app quit.
    */
   async flushAll(): Promise<void> {
-    const sessionIds = [...this.pending.keys()]
+    const sessionIds = [...new Set([...this.pending.keys(), ...this.writeInProgress.keys()])]
     await Promise.all(sessionIds.map(id => this.flush(id)))
   }
 

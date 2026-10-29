@@ -14,6 +14,8 @@ This is [Hallicopter/agents](https://github.com/Hallicopter/agents), a maintaine
 
 ### Changes from upstream
 
+- **Safe session replacement:** synchronous and queued saves use unique temporary files and rename directly over the prior record, without deleting it first. Session listing never removes temporary files. Timer-triggered saves use the same serialization as explicit flushes, and shutdown flushing waits for active saves. Failed replacements preserve the old record and temporary data for recovery.
+
 - **Terra compatibility:** adds `gpt-6.1-terra` to the Pi Codex catalog when absent, preserving existing models and OAuth. Explicit Terra requests fail instead of silently falling back to another model; runtime model/provider checks and mini-query response attribution checks enforce the selection. Existing SDK definitions take precedence over the temporary bridge.
 - **Runtime cleanup:** disposes managed agent runtimes after processing completes, during session deletion, and during manager cleanup, releasing associated resources.
 - **Optional workspace watcher switch:** `CRAFT_DISABLE_WORKSPACE_CONFIG_WATCHER=1` disables the SessionManager workspace ConfigWatcher. Accepted true values are `1`, `true`, `yes`, and `on`. This sacrifices automatic workspace configuration refresh through that watcher; it does not disable every watcher in the application. Automations still initialize.
@@ -32,6 +34,7 @@ git fetch upstream --tags
 git merge VERSION
 bun install --frozen-lockfile
 bun test packages/pi-agent-server/src/terra-model.test.ts
+bun test packages/shared/src/sessions/__tests__ packages/shared/tests/persistence-queue.test.ts
 bun run --cwd packages/pi-agent-server typecheck
 bun run server:build:subprocess
 bun run webui:build
@@ -44,7 +47,7 @@ Before deployment, back up application and workspace data; validate any changed 
 ### Operational notes and known issues
 
 - The Linux host previously exhausted its inotify watch capacity. Its limits were raised to `fs.inotify.max_user_watches=1048576` and `fs.inotify.max_user_instances=1024`. These are host settings, not application defaults or a fix for excessive recursive watching.
-- **Session persistence remains an upstream issue in this baseline:** save paths unlink the existing `session.jsonl` before renaming its temporary replacement, while session listing removes `.tmp` files. A failed rename can leave the session record missing. This fork does not yet include a persistence repair; retain independent backups of session data. Recovery of existing sessions is separate from fixing this code path.
+- **Session persistence repair:** the delete-before-rename and temporary-file cleanup race is fixed in this fork. This prevents that failure mechanism; it does not reconstruct previously missing sessions, arbitrate edits across separate server processes, or guarantee durability during power loss. Failed-save temporary files are retained for manual recovery; keep independent backups.
 
 ## How it Works (Video)
 To understand what Craft Agents does and how it works watch this video.

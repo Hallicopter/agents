@@ -5,7 +5,8 @@
  * Format: Line 1 = SessionHeader, Lines 2+ = StoredMessage (one per line)
  */
 
-import { openSync, readSync, closeSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'fs';
+import { randomUUID } from 'node:crypto';
+import { openSync, readSync, closeSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { open, readFile } from 'fs/promises';
 import { dirname } from 'path';
 import type { SessionHeader, StoredSession, StoredMessage, SessionTokenUsage } from './types.ts';
@@ -156,10 +157,10 @@ export function writeSessionJsonl(sessionFile: string, session: StoredSession): 
     ...session.messages.map(m => makeSessionPathPortable(JSON.stringify(m), sessionDir)),
   ];
 
-  const tmpFile = sessionFile + '.tmp';
+  const tmpFile = `${sessionFile}.${randomUUID()}.tmp`; // Private to this writer.
   writeFileSync(tmpFile, lines.join('\n') + '\n');
-  // On Windows, rename fails if target exists. Delete first for cross-platform compatibility.
-  try { unlinkSync(sessionFile); } catch { /* ignore if doesn't exist */ }
+  // Replace directly. If rename fails, retain both the original and recovery temp.
+  // Never unlink the last good copy, including on Windows.
   renameSync(tmpFile, sessionFile);
 }
 
