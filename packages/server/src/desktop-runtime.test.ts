@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { mkdtempSync, writeFileSync, rmSync, chmodSync, symlinkSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createDesktopRuntime, effectiveVncPassword } from './desktop-runtime'
+import { createDesktopRuntime, effectiveVncPassword, readSystemdDesktopCredential } from './desktop-runtime'
 import type { SessionManager } from '@craft-agent/server-core/sessions'
 
 const scope = { workspaceId: 'ws', sessionId: 's' }
@@ -111,4 +111,17 @@ test('long ASCII adapter is challenge-equivalent to VNC eight-byte DES key', asy
     return cipher.encrypt({}, new Uint8Array(16).fill(42))
   }
   expect(await encrypt(effectiveVncPassword('abcdefgh-extra\r\n'))).toEqual(await encrypt('abcdefgh'))
+})
+
+test('systemd credential namespace cannot be supplied by arbitrary config path', () => {
+  const old=process.env.CREDENTIALS_DIRECTORY
+  try {
+    delete process.env.CREDENTIALS_DIRECTORY
+    expect(() => readSystemdDesktopCredential('/tmp/password')).toThrow()
+    process.env.CREDENTIALS_DIRECTORY='/run/credentials/unit.service'
+    expect(() => readSystemdDesktopCredential('/tmp/password')).toThrow()
+    expect(() => readSystemdDesktopCredential('/run/credentials/unit.service/other')).toThrow()
+    process.env.CREDENTIALS_DIRECTORY='/tmp/untrusted'
+    expect(() => readSystemdDesktopCredential('/tmp/untrusted/desktop-vnc')).toThrow()
+  } finally { if(old===undefined)delete process.env.CREDENTIALS_DIRECTORY;else process.env.CREDENTIALS_DIRECTORY=old }
 })
