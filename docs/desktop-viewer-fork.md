@@ -99,3 +99,46 @@ Confirmed user target: **macOS Apple Silicon/M1, arm64**. No DMG/app/ZIP was pro
 - Explicit desktop entitlement + session revocation integration and exact production/Electron Origin, followed by approved server deployment/restart.
 - Mac arm64 build host and signing/notarization identity/process. Any future fork-only update policy requires a separate decision; current official updater remains unchanged.
 - Separately approved installer distribution/GitHub release publication. No release, merge, live config or service changes are part of this implementation.
+
+## Headless deployment integration (opt-in follow-up)
+
+`packages/server/src/desktop-runtime.ts` constructs a single gateway only when
+`CRAFT_DESKTOP_CONFIG` names an operator-provisioned private JSON file. Both the
+file and its containing directory must be private (no group/other access), owned
+by root or the service user. Config, secret and revocation journal are opened
+with `O_NOFOLLOW` and checked/read on the same fd. Root and the service user are
+trusted operators: final-component no-follow does not protect against a trusted
+operator replacing ancestors. Do not place configuration beneath an untrusted
+writable ancestor.
+
+The JSON contains `origin` (existing HTTPS RPC listener), optional `rpcOrigin`
+(one exact renderer origin; HTTP only for literal loopback/localhost),
+`upstream: {host,port,passwordFile}`, and `entitlements` entries of
+`{workspaceId,sessionId,expiresAt}`. This is RPC-only: HTTP grant authorization
+always denies. No default/all-workspace entitlement exists. Each check reads the
+current config/journal and verifies real session membership, then rechecks after
+asynchronous lookup. Endpoint changes fail closed until reviewed restart.
+
+Provision an empty private `<config-path>.revoked` journal before first startup;
+it is never recreated automatically. Stop/delete writes and fsyncs revocation
+before calling the original lifecycle method. Journal failure disables viewing
+but does not prevent Stop/delete. Revocations survive process restart. File
+changes immediately revoke tracked grants/viewers, with periodic checks as
+backup. Never restore an older journal during rollback or re-enable a stopped
+session merely because it still exists.
+
+Use a narrowly scoped systemd `LoadCredential=desktop-vnc:<existing-root-secret>`
+for server-only secret access; do not chmod/chown the original root-only file,
+place its content in environment/config/renderer, or log it. A service credential
+addition and exact deployment config must be approved and reviewed before use.
+This follow-up does not itself establish live deployment or a real desktop frame.
+
+The narrow TigerVNC adapter validates the entire bounded plaintext as printable
+ASCII, strips at most one terminal LF/CRLF, rejects empty/embedded newlines or
+non-ASCII (including malformed suffixes), then derives the first eight ASCII
+bytes used by standard VncAuth DES. The gateway still rejects keys longer than
+eight bytes. Neither the raw nor effective credential is logged or persisted.
+On 30 October 2026 a transient `LoadCredential` authentication-only check against
+the existing loopback5902 succeeded (RFB3.8/type2); it stopped before ClientInit,
+framebuffer requests or input. This establishes effective-key compatibility,
+not a live viewer frame or desktop UI validation.

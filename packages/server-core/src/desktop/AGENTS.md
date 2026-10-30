@@ -6,3 +6,4 @@
 - No keyboard/pointer/clipboard/takeover/CUA integration additions without a separate design review. Viewer disconnect must not stop the existing desktop/container/profile.
 - Tests use isolated loopback fixtures only. `browser-fixture.ts` runs actual bundled noVNC via temporary Chrome profile/certificate and emits explicitly labeled test artifacts. Never point it at the live desktop.
 - Read `docs/desktop-viewer-fork.md` for security bounds, deployment callbacks, exact M1 build/update caveats and remaining approvals.
+- Headless opt-in integration lives in `packages/server/src/desktop-runtime.ts`: private explicit per-session expiring grants, fd-bound files, durable revoke journal and original cancel/delete preservation. Public WSS destination and optional exact dev renderer Origin are separate. HTTP loopback renderer Origin is never permission for plaintext WSS transport.

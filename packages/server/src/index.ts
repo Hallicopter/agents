@@ -26,6 +26,7 @@
  */
 
 import { join } from 'node:path'
+import { createDesktopRuntime } from './desktop-runtime'
 import { readFileSync, existsSync } from 'node:fs'
 import { version as packageVersion } from '../package.json'
 import { enableDebug } from '@craft-agent/shared/utils/debug'
@@ -111,6 +112,9 @@ if (tlsCertPath || tlsKeyPath) {
   }
 }
 
+// Explicit opt-in operator deployment; password is never placed in configuration.
+const desktopRuntime = createDesktopRuntime(process.env.CRAFT_DESKTOP_CONFIG)
+
 // Web UI configuration
 const webuiDir = process.env.CRAFT_WEBUI_DIR || undefined
 const webuiEnabled = webuiDir && existsSync(webuiDir)
@@ -137,6 +141,7 @@ if (webuiEnabled && serverToken) {
 
   webuiHandler = createWebuiHandler({
     webuiDir: webuiDir!,
+    desktopGateway: desktopRuntime?.gateway,
     secret: serverToken,
     password: process.env.CRAFT_WEBUI_PASSWORD || undefined,
     secureCookies: webuiSecureCookies,
@@ -167,6 +172,7 @@ const instance = await (async () => {
   try {
     return await bootstrapServer<SessionManager, HandlerDeps>({
       bundledAssetsRoot,
+      desktopGateway: desktopRuntime?.gateway,
       serverVersion: process.env.CRAFT_VERSION ?? packageVersion,
       tls,
       // When web UI is enabled, accept JWT session cookies on WebSocket upgrade
@@ -204,7 +210,11 @@ const instance = await (async () => {
           oauthIdToken: oauth?.idToken,
         }
       }),
-      createSessionManager: () => new SessionManager(),
+      createSessionManager: () => {
+        const manager = new SessionManager()
+        desktopRuntime?.bind(manager)
+        return manager
+      },
       bindRpcServer: (sm, server) => sm.setRpcServer(server),
       createHandlerDeps: ({ sessionManager, platform, oauthFlowStore }) => {
         messagingHandle = createMessagingBootstrap({
@@ -341,6 +351,7 @@ if (!isLocalBind && instance.protocol === 'ws') {
 }
 
 const shutdown = async () => {
+  desktopRuntime?.dispose()
   webuiHandler?.dispose()
   healthServer?.stop()
   if (messagingHandle) {
