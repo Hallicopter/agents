@@ -4,6 +4,7 @@
  * Key paths are internal and may be reorganized freely.
  */
 export const RPC_CHANNELS = {
+  desktop: { GRANT: 'desktop:grant' },
   remote: {
     TEST_CONNECTION: 'remote:testConnection',
   },

@@ -10,6 +10,7 @@
  *    for separate-port deployments or development.
  */
 
+import { desktopUnavailable, type DesktopGateway } from '../desktop/gateway'
 import { join, extname } from 'node:path'
 import {
   RateLimiter,
@@ -121,6 +122,8 @@ export interface OAuthCallbackDeps {
 }
 
 export interface WebuiHandlerOptions {
+  /** Disabled unless the host supplies an entitled private desktop gateway. */
+  desktopGateway?: DesktopGateway
   /** Path to built web UI dist/ directory. */
   webuiDir: string
   /** Secret used to sign JWTs — typically CRAFT_SERVER_TOKEN. */
@@ -204,6 +207,7 @@ export function createWebuiHandler(options: WebuiHandlerOptions): WebuiHandler {
   async function fetch(req: Request): Promise<Response> {
     const url = new URL(req.url)
     const path = url.pathname
+    if (path.startsWith('/api/desktop')) return options.desktopGateway?.fetch(req) ?? desktopUnavailable()
     const useSecureCookies = shouldUseSecureCookies(req, secureCookies)
 
     // ── Health endpoint (no auth) ──

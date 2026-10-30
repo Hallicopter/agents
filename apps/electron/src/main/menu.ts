@@ -1,3 +1,4 @@
+import { displayAppName } from '../shared/display-name'
 import { Menu, app, shell, BrowserWindow } from 'electron'
 import { i18n } from '@craft-agent/shared/i18n'
 import { RPC_CHANNELS, type BroadcastEventMap } from '../shared/types'
@@ -80,9 +81,9 @@ export async function rebuildMenu(): Promise<void> {
   const template: Electron.MenuItemConstructorOptions[] = [
     // App menu (macOS only)
     ...(isMac ? [{
-      label: 'Craft Agents',
+      label: displayAppName(app.getName()),
       submenu: [
-        { role: 'about' as const, label: i18n.t('menu.aboutCraftAgents') },
+        { role: 'about' as const, label: `About ${displayAppName(app.getName())}` },
         updateMenuItem,
         { type: 'separator' as const },
         {

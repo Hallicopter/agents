@@ -1,3 +1,4 @@
+import type { DesktopGateway } from '../desktop/gateway'
 import { writeFileSync, readFileSync, unlinkSync, existsSync, readlinkSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { uptime as osUptime } from 'node:os'
@@ -18,6 +19,8 @@ interface ModelRefreshServiceLike {
 }
 
 export interface ServerBootstrapOptions<TSessionManager, THandlerDeps> {
+  /** Optional private watch-only gateway; absent means disabled. */
+  desktopGateway?: DesktopGateway
   serverToken?: string
   rpcHost?: string
   rpcPort?: number
@@ -378,6 +381,7 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
     serverVersion: options.serverVersion,
     tls: options.tls,
     httpHandler: options.httpHandler,
+    desktopGateway: options.desktopGateway,
     onClientConnected: options.onClientConnected,
     onClientDisconnected: (clientId) => {
       options.cleanupClientResources?.(clientId)

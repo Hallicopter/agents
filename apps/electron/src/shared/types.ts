@@ -242,6 +242,8 @@ import type {
 export type WindowVibrancy = 'under-window' | 'mica'
 
 export interface ElectronAPI {
+  /** Scoped single-use viewer grant, never an upstream/admin credential. */
+  getDesktopViewerGrant(sessionId: string, origin: string): Promise<{ token: string; url: string }>
   // Session management
   getSessions(): Promise<Session[]>
   getUnreadSummary(): Promise<UnreadSummary>

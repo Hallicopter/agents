@@ -259,3 +259,7 @@ A backend that invents a narrower envelope is guaranteed to drift over time
 ## Source of truth
 - Package exports: `packages/shared/src/index.ts` and subpath export entries.
 - Agent exports: `packages/shared/src/agent/index.ts`
+
+## Desktop viewer RPC
+
+`desktop:grant` is REMOTE_ELIGIBLE: the workspace-owning authenticated backend issues a short-lived watch-only grant, never an admin/VNC credential. It is separate from LOCAL_ONLY browser-pane control. Server-side desktop entitlement and RFB enforcement remain mandatory; see `docs/desktop-viewer-fork.md`. Keep channel classification exhaustive when changing this surface.
