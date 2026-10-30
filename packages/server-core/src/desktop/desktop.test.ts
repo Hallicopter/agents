@@ -78,6 +78,7 @@ describe('gateway authorization', () => {
     const gateway = new DesktopGateway({ ...options(), electronOrigin: 'null', authorizeRpc: async (_, s) => s.sessionId === scope.sessionId })
     const ctx = { workspaceId: scope.workspaceId, clientId: 'client', webContentsId: null }
     try {
+      await expect(gateway.issueRpcGrant(ctx, scope.sessionId, undefined as unknown as string, () => true)).rejects.toThrow()
       await expect(gateway.issueRpcGrant(ctx, scope.sessionId, 'null', () => false)).rejects.toThrow()
       await expect(gateway.issueRpcGrant(ctx, 'foreign', 'null', () => true)).rejects.toThrow()
       expect((await gateway.issueRpcGrant(ctx, scope.sessionId, 'null', () => true)).url).toBe('wss://desktop.example.test/api/desktop/view')
