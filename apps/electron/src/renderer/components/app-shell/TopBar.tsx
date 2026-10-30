@@ -31,6 +31,7 @@ import type { Workspace } from "../../../shared/types"
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher"
 import { CompactWorkspaceSwitcher } from "./CompactWorkspaceSwitcher"
 import { getDocUrl } from "@craft-agent/shared/docs/doc-links"
+import { DesktopViewer } from "../desktop/DesktopViewer"
 import { AppMenu } from "../AppMenu"
 
 const RIGHT_SLOT_FULL_BADGES_THRESHOLD = 420
@@ -87,6 +88,7 @@ export function TopBar({
   isCompact,
 }: TopBarProps) {
   const { t } = useTranslation()
+  const [desktopOpen, setDesktopOpen] = useState(false)
   const [maxVisibleBrowserBadges, setMaxVisibleBrowserBadges] = useState(3)
   const rightSlotRef = useRef<HTMLDivElement | null>(null)
 
@@ -242,6 +244,10 @@ export function TopBar({
               <SquarePenRounded className="h-3.5 w-3.5" />
               {t("session.newSessionInPanel")}
             </StyledDropdownMenuItem>
+            <StyledDropdownMenuItem onClick={() => setDesktopOpen(true)}>
+              <Icons.Monitor className="h-3.5 w-3.5" />
+              Desktop · watch only
+            </StyledDropdownMenuItem>
             <StyledDropdownMenuItem onClick={onAddBrowserPanel}>
               <Icons.Globe className="h-3.5 w-3.5" />
               {t("browser.newWindow")}
@@ -297,6 +303,7 @@ export function TopBar({
       </div>
       )}
       </div>
+      <DesktopViewer key={`${activeWorkspaceId}:${activeSessionId}`} open={desktopOpen} onOpenChange={setDesktopOpen} workspaceId={activeWorkspaceId} sessionId={activeSessionId} />
     </div>
   )
 }

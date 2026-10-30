@@ -10,6 +10,7 @@
 import { WebSocketServer, type WebSocket } from 'ws'
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
+import type { DesktopGateway } from '../desktop/gateway'
 import { randomUUID } from 'node:crypto'
 import {
   PROTOCOL_VERSION,
@@ -79,6 +80,8 @@ export interface WsRpcTlsOptions {
 }
 
 export interface WsRpcServerOptions {
+  /** Optional private watch-only gateway, on the existing ingress only. */
+  desktopGateway?: DesktopGateway
   /** Host to bind to. Default: '127.0.0.1' */
   host?: string
   /** Port to bind to. 0 = random available port. Default: 0 */
@@ -149,6 +152,7 @@ export class WsRpcServer implements RpcServer {
   private readonly onClientConnected: WsRpcServerOptions['onClientConnected']
   private readonly onClientDisconnected: WsRpcServerOptions['onClientDisconnected']
   private readonly httpHandler: WsRpcServerOptions['httpHandler']
+  private readonly desktopGateway?: DesktopGateway
 
   constructor(opts?: WsRpcServerOptions) {
     this.host = opts?.host ?? '127.0.0.1'
@@ -163,6 +167,13 @@ export class WsRpcServer implements RpcServer {
     this.onClientConnected = opts?.onClientConnected
     this.onClientDisconnected = opts?.onClientDisconnected
     this.httpHandler = opts?.httpHandler
+    this.desktopGateway = opts?.desktopGateway
+    if (this.desktopGateway && !this.requireAuth) throw new Error('Desktop gateway requires authenticated RPC')
+    this.handle('desktop:grant', (ctx, sessionId: string, origin: string) => {
+      if (!this.desktopGateway) throw new Error('Desktop unavailable')
+      return this.desktopGateway.issueRpcGrant(ctx, sessionId, origin, () =>
+        this.clients.get(ctx.clientId)?.workspaceId === ctx.workspaceId)
+    })
   }
 
   /** The actual port the server is listening on (available after listen()). */
@@ -265,6 +276,19 @@ export class WsRpcServer implements RpcServer {
   // Lifecycle
   // -------------------------------------------------------------------------
 
+  private routedWebSocketServer(server: HttpServer | HttpsServer): WebSocketServer {
+    const rpc = new WebSocketServer({ noServer: true, maxPayload: NODE_WS_MAX_MESSAGE_BYTES })
+    server.on('upgrade', (req, socket, head) => {
+      if (req.url?.startsWith('/api/desktop')) {
+        if (this.desktopGateway) this.desktopGateway.upgrade(req, socket, head)
+        else socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+        return
+      }
+      rpc.handleUpgrade(req, socket, head, ws => rpc.emit('connection', ws, req))
+    })
+    return rpc
+  }
+
   async listen(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.tlsOptions) {
@@ -282,7 +306,7 @@ export class WsRpcServer implements RpcServer {
           this.httpHandler,
         )
 
-        this.wss = new WebSocketServer({ server: this.httpsServer, maxPayload: NODE_WS_MAX_MESSAGE_BYTES })
+        this.wss = this.routedWebSocketServer(this.httpsServer)
 
         this.httpsServer.on('error', (err) => reject(err))
 
@@ -294,11 +318,11 @@ export class WsRpcServer implements RpcServer {
           this.startHeartbeat()
           resolve()
         })
-      } else if (this.httpHandler) {
+      } else if (this.httpHandler || this.desktopGateway) {
         // Plain WS + HTTP handler: create an HTTP server for both.
         this._protocol = 'ws'
         this.httpServer = createHttpServer(this.httpHandler)
-        this.wss = new WebSocketServer({ server: this.httpServer, maxPayload: NODE_WS_MAX_MESSAGE_BYTES })
+        this.wss = this.routedWebSocketServer(this.httpServer)
 
         this.httpServer.on('error', (err) => reject(err))
 
@@ -314,6 +338,7 @@ export class WsRpcServer implements RpcServer {
         // Plain WS mode, no HTTP handler
         this._protocol = 'ws'
         this.wss = new WebSocketServer({
+          verifyClient: ({ req }: { req: import('node:http').IncomingMessage }) => !req.url?.startsWith('/api/desktop'),
           host: this.host,
           port: this.requestedPort,
           maxPayload: NODE_WS_MAX_MESSAGE_BYTES,
@@ -340,6 +365,7 @@ export class WsRpcServer implements RpcServer {
   }
 
   close(): void {
+    this.desktopGateway?.dispose()
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null

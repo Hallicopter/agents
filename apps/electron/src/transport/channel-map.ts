@@ -17,6 +17,7 @@ function listener(channel: string) {
 }
 
 export const CHANNEL_MAP = {
+  getDesktopViewerGrant: invoke(RPC_CHANNELS.desktop.GRANT),
   // Session management
   getSessions: invoke(RPC_CHANNELS.sessions.GET),
   getUnreadSummary: invoke(RPC_CHANNELS.sessions.GET_UNREAD_SUMMARY),

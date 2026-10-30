@@ -1,3 +1,4 @@
+import { displayAppName } from '../shared/display-name'
 import { BrowserWindow, clipboard, shell, nativeTheme, Menu, app } from 'electron'
 import { i18n } from '@craft-agent/shared/i18n'
 import { windowLog } from './logger'
@@ -173,7 +174,7 @@ export class WindowManager {
    * so these setTitle() calls aren't clobbered by the static <title> tag.
    */
   private refreshWindowTitles(): void {
-    const defaultTitle = app.getName()
+    const defaultTitle = displayAppName(app.getName())
     const showWorkspaceName = this.windows.size > 1
     for (const { window, workspaceId } of this.windows.values()) {
       if (window.isDestroyed()) continue
