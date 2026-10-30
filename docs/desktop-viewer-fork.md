@@ -142,3 +142,20 @@ On 30 October 2026 a transient `LoadCredential` authentication-only check agains
 the existing loopback5902 succeeded (RFB3.8/type2); it stopped before ClientInit,
 framebuffer requests or input. This establishes effective-key compatibility,
 not a live viewer frame or desktop UI validation.
+
+### Systemd credential ACL compatibility correction
+
+Production `LoadCredential` on this host uses root-owned0440 files and0550
+directories with named-service-user POSIX ACLs; mode group-class bits are the ACL
+mask, while group-object permissions are zero. Applying config/journal0600
+checks to those files caused the live gateway to close before its ready message.
+The separate credential reader now accepts only exact
+`CREDENTIALS_DIRECTORY/desktop-vnc`, with the namespace supplied by systemd,
+canonical `/run/credentials/<unit>` form, root-owned protected ancestors,
+descriptor-anchored no-follow directory/file opens, rootuid/gid0 read-only
+0400/0440 files (<=130bytes) and0500/0550 credential directories. This trusts
+root/systemd ACL provisioning; mode bits alone do not prove ACL audience.
+Config/journal stay strictprivate. No source chmod/chown/ACL change is made.
+Run optional root-only synthetic metadata regressions with
+`sudo bun test packages/server/src/desktop-credential-root.test.ts`; tests use
+only temporary dummy strings under `/run/credentials`, never real secrets.

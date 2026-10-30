@@ -1,5 +1,5 @@
 import { constants, openSync, closeSync, fstatSync, readFileSync, writeSync, fsyncSync, watch, type FSWatcher } from 'node:fs'
-import { dirname, basename } from 'node:path'
+import { dirname, basename, join } from 'node:path'
 import { DesktopGateway, type DesktopScope } from '@craft-agent/server-core/desktop'
 import type { SessionManager } from '@craft-agent/server-core/sessions'
 
@@ -22,6 +22,35 @@ function privateFd(path: string, flags: number, maxSize: number): number {
 function privateRead(path: string, maxSize: number): string {
   const fd = privateFd(path, constants.O_RDONLY, maxSize)
   try { return readFileSync(fd, 'utf8') } finally { closeSync(fd) }
+}
+
+/** Systemd exposes root-owned read-only credentials via a named-user ACL.
+ * The apparent group mode bits are the ACL mask, not a group permission grant.
+ * Only the exact systemd-injected credential namespace is eligible; never config/journal.
+ */
+export function readSystemdDesktopCredential(path: string): string {
+  const directory = process.env.CREDENTIALS_DIRECTORY
+  if (!directory || !/^\/run\/credentials\/[^/.][^/]*$/.test(directory) || path !== join(directory, 'desktop-vnc')) throw new Error('Desktop credential namespace required')
+  const run = openSync('/run', constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+  let credentials: number | undefined
+  let dir: number | undefined
+  try {
+    const rs = fstatSync(run)
+    if (rs.uid !== 0 || (rs.mode & 0o022) !== 0) throw new Error('Unsafe credential ancestor')
+    credentials = openSync(`/proc/self/fd/${run}/credentials`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+    const cs = fstatSync(credentials)
+    if (cs.uid !== 0 || (cs.mode & 0o022) !== 0) throw new Error('Unsafe credential ancestor')
+    dir = openSync(`/proc/self/fd/${credentials}/${basename(directory)}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+    const ds = fstatSync(dir)
+    if (ds.uid !== 0 || ds.gid !== 0 || ![0o500, 0o550].includes(ds.mode & 0o777)) throw new Error('Unsafe systemd credential directory')
+    // Pin the directory inode while opening its final component (no ancestor race).
+    const fd = openSync(`/proc/self/fd/${dir}/desktop-vnc`, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      const st = fstatSync(fd)
+      if (!st.isFile() || st.uid !== 0 || st.gid !== 0 || ![0o400, 0o440].includes(st.mode & 0o777) || st.size > 130) throw new Error('Unsafe systemd desktop credential')
+      return readFileSync(fd, 'utf8')
+    } finally { closeSync(fd) }
+  } finally { if (dir !== undefined) closeSync(dir); if (credentials !== undefined) closeSync(credentials); closeSync(run) }
 }
 
 /** TigerVNC VncAuth uses the first eight ASCII bytes as its DES key. */
@@ -65,7 +94,7 @@ export function createDesktopRuntime(path: string | undefined) {
     rpcOrigin: initial.rpcOrigin,
     upstream: {
       host: initial.upstream.host, port: initial.upstream.port,
-      password: async () => effectiveVncPassword(privateRead(initial.upstream.passwordFile, 130)),
+      password: async () => effectiveVncPassword(readSystemdDesktopCredential(initial.upstream.passwordFile)),
     },
     authorize: async () => false,
     authorizeRpc: async (context, scope) => {
