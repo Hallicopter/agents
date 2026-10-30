@@ -83,7 +83,7 @@ export class DesktopGateway {
     } catch { return unavailable() }
   }
   async issueRpcGrant(context: RequestContext, sessionId: string, origin: string, connected: () => boolean): Promise<{ token: string; url: string }> {
-    if (!context.workspaceId || typeof sessionId !== 'string' || !sessionId || sessionId.length > 200 ||
+    if (!context.workspaceId || typeof origin !== 'string' || typeof sessionId !== 'string' || !sessionId || sessionId.length > 200 ||
         (origin !== this.options.origin && origin !== this.options.rpcOrigin && (!this.options.electronOrigin || origin !== this.options.electronOrigin))) throw new Error('Desktop unavailable')
     const scope = { workspaceId: context.workspaceId, sessionId }
     const validate = async () => connected() && !!await boundedAuthorization(async () => !!await this.options.authorizeRpc?.(context, scope))
