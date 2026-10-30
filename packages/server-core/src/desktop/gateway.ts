@@ -26,6 +26,8 @@ export interface DesktopGatewayOptions {
   trustedTlsIngress?: boolean
   /** Explicit Electron file origin allowed only for RPC-issued grants. */
   electronOrigin?: 'null' | 'file://'
+  /** Exact dev renderer origin. HTTP is restricted to literal loopback/localhost. */
+  rpcOrigin?: string
   authorizeRpc?: (context: RequestContext, scope: DesktopScope) => Promise<boolean>
 }
 interface Grant { scope: DesktopScope; validate: () => Promise<boolean>; origin: string; expires: number }
@@ -43,6 +45,11 @@ export class DesktopGateway {
   constructor(private readonly options: DesktopGatewayOptions) {
     const origin = new URL(options.origin)
     if (origin.protocol !== 'https:' || origin.origin !== options.origin) throw new Error('Exact HTTPS desktop origin required')
+    if (options.rpcOrigin) {
+      const renderer = new URL(options.rpcOrigin)
+      if (renderer.origin !== options.rpcOrigin || (renderer.protocol !== 'https:' &&
+          !(renderer.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(renderer.hostname)))) throw new Error('Exact secure or loopback renderer origin required')
+    }
     const { host, port } = options.upstream
     const parts = host.split('.').map(Number)
     const allowed = host === '127.0.0.1' || (parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127)
@@ -77,7 +84,7 @@ export class DesktopGateway {
   }
   async issueRpcGrant(context: RequestContext, sessionId: string, origin: string, connected: () => boolean): Promise<{ token: string; url: string }> {
     if (!context.workspaceId || typeof sessionId !== 'string' || !sessionId || sessionId.length > 200 ||
-        (origin !== this.options.origin && (!this.options.electronOrigin || origin !== this.options.electronOrigin))) throw new Error('Desktop unavailable')
+        (origin !== this.options.origin && origin !== this.options.rpcOrigin && (!this.options.electronOrigin || origin !== this.options.electronOrigin))) throw new Error('Desktop unavailable')
     const scope = { workspaceId: context.workspaceId, sessionId }
     const validate = async () => connected() && !!await boundedAuthorization(async () => !!await this.options.authorizeRpc?.(context, scope))
     if (!await validate() || this.disposed) throw new Error('Desktop unavailable')
@@ -90,7 +97,7 @@ export class DesktopGateway {
   /** Call only from the existing ingress's upgrade dispatcher; never open a port. */
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const secure = (req.socket as Socket & { encrypted?: boolean }).encrypted || this.options.trustedTlsIngress === true
-    if (this.disposed || !secure || req.url !== DESKTOP_PATH || (req.headers.origin !== this.options.origin && (!this.options.electronOrigin || req.headers.origin !== this.options.electronOrigin)) || this.viewers.size >= 2) {
+    if (this.disposed || !secure || req.url !== DESKTOP_PATH || (req.headers.origin !== this.options.origin && (!this.options.rpcOrigin || req.headers.origin !== this.options.rpcOrigin) && (!this.options.electronOrigin || req.headers.origin !== this.options.electronOrigin)) || this.viewers.size >= 2) {
       socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return
     }
     this.wss.handleUpgrade(req, socket, head, ws => {
