@@ -17,6 +17,8 @@
  *   CRAFT_IS_PACKAGED          — 'true' for production (default: false)
  *   CRAFT_VERSION              — app version (default: 0.0.0-dev)
  *   CRAFT_DEBUG                — 'true' for debug logging
+ *   CRAFT_COMPANION_ENABLED    — explicit true enables scoped HTTPS companion facade + owner-only Unix admin socket
+ *   CRAFT_ANDROID_APK_PATH     — absolute path to the fixed hash-pinned private APK (native TLS only)
  *   CRAFT_WEBUI_DIR            — path to built web UI assets (enables web UI on RPC port)
  *   CRAFT_WEBUI_PASSWORD       — optional shorter password for web login (falls back to CRAFT_SERVER_TOKEN)
  *   CRAFT_WEBUI_SECURE_COOKIE  — optional true/false override for the session cookie Secure flag
@@ -43,6 +45,8 @@ if (process.argv.includes('--generate-token')) {
   console.log(generateServerToken())
   process.exit(0)
 }
+import { createAndroidApkDownload } from './android-apk-download'
+import { companionNodeHandler, initializeCompanion } from './companion'
 import type { WsRpcTlsOptions } from '@craft-agent/server-core/transport'
 import { registerCoreRpcHandlers, cleanupRpcClientResources } from '@craft-agent/server-core/handlers/rpc'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
@@ -129,6 +133,10 @@ const serverToken = process.env.CRAFT_SERVER_TOKEN
 // because health checks are injected lazily via getHealthCheck().
 // ---------------------------------------------------------------------------
 
+const companionEnabled = process.env.CRAFT_COMPANION_ENABLED === 'true'
+let companion: Awaited<ReturnType<typeof initializeCompanion>> | null = null
+const companionHttp = companionNodeHandler(() => companion?.handler ?? null)
+
 let webuiHandler: WebuiHandler | null = null
 let webuiNodeHandler: ReturnType<typeof nodeHttpAdapter> | undefined
 
@@ -157,6 +165,22 @@ if (webuiEnabled && serverToken) {
   webuiNodeHandler = nodeHttpAdapter(webuiHandler.fetch)
 }
 
+// Explicit operator opt-in; the only unauthenticated download is a hash-pinned
+// credential-free APK, restricted to native TLS and actual tailnet peers.
+const androidApkDownload = createAndroidApkDownload(process.env.CRAFT_ANDROID_APK_PATH, Boolean(tls))
+const httpHandler: typeof webuiNodeHandler = androidApkDownload || companionEnabled
+  ? (req, res) => {
+      if (androidApkDownload?.(req, res)) return
+      if (companionEnabled && (req.url ?? '').split('?')[0]!.startsWith('/api/companion/')) {
+        companionHttp(req, res)
+        return
+      }
+      if (webuiNodeHandler) return webuiNodeHandler(req, res)
+      res.statusCode = 404
+      res.end()
+    }
+  : webuiNodeHandler
+
 // Resolve WhatsApp worker paths up-front so the helper + Docker env stay in sync.
 // The worker is a Node subprocess — Bun cannot run it directly — so we must
 // pass an explicit `nodeBin` (Electron defaults nodeBin to process.execPath
@@ -184,7 +208,7 @@ const instance = await (async () => {
           }
         : undefined,
       // Embed the WebUI HTTP handler on the WS server's port
-      httpHandler: webuiNodeHandler,
+      httpHandler,
       applyPlatformToSubsystems: (platform) => {
         setFetcherPlatform(platform)
         setSessionPlatform(platform)
@@ -249,6 +273,7 @@ const instance = await (async () => {
       },
       initializeSessionManager: async (sessionManager) => {
         await sessionManager.initialize()
+        if (companionEnabled) companion = await initializeCompanion(sessionManager, CONFIG_DIR)
       },
       cleanupSessionManager: async (sessionManager) => {
         try {
@@ -352,6 +377,7 @@ if (!isLocalBind && instance.protocol === 'ws') {
 }
 
 const shutdown = async () => {
+  companion?.admin.close()
   await desktopRuntime?.dispose()
   webuiHandler?.dispose()
   healthServer?.stop()

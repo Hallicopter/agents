@@ -876,7 +876,11 @@ interface ManagedSession {
     mergeWith?: object
     /** Mid-turn messages: the pending continuation check that may set `mergeWith`. */
     continuationCheck?: Promise<void>
+    /** Runtime-only transport authorization; revalidated at every delivery boundary. */
+    authorize?: () => void
   }>
+  // Guarded queues cannot be recovered without their live authorization callback.
+  guardedMessageContents?: Map<string, string>
   // Original host payloads for backends that can return undelivered text steers.
   // Runtime-only; Pi's native steering does not opt into an acknowledgement protocol.
   acceptedSteers?: Map<string, ManagedSession['messageQueue'][number]>
@@ -897,6 +901,7 @@ interface ManagedSession {
   pendingAuthRequest?: AuthRequest
   // Auth retry tracking (for mid-session token expiry)
   // Store last sent message/attachments to enable retry after token refresh
+  lastSentAuthorize?: () => void
   lastSentMessage?: string
   // IDs of the user bubbles the last send stands for (several for a merged replay); the auth retry
   // removes exactly these before resending.
@@ -1700,7 +1705,9 @@ export class SessionManager implements ISessionManager {
         this.decideMidTurnDelivery(managed, payload.message, configured),
         payload.continuationCheck,
       ])
-      if ((decided ?? configured) !== 'steer') return
+      // A backend may buffer redirect text and consume it much later without
+      // a host authorization hook. Guarded transports must stay in the host queue.
+      if (payload.authorize || (decided ?? configured) !== 'steer') return
       if (isInQueuedContinuation(managed.messageQueue, payload)) {
         sessionLog.info('[mid-turn] Not steering part of a continued message; it replays with the rest', { sessionId: managed.id, messageId: payload.messageId })
         return
@@ -2710,7 +2717,12 @@ export class SessionManager implements ISessionManager {
         workspaceRootPath: managed.workspace.rootPath,
         createdAt: managed.createdAt ?? Date.now(),
         lastUsedAt: Date.now(),
-        messages: persistableMessages.map(messageToStored),
+        messages: persistableMessages.map(message => {
+          const stored = messageToStored(message)
+          // A callback cannot survive restart. Keep the transcript, but never
+          // silently recover a device-authorized queued send without reauthorization.
+          return managed.guardedMessageContents?.has(message.id) ? { ...stored, isQueued: false } : stored
+        }),
         tokenUsage: managed.tokenUsage ?? DEFAULT_TOKEN_USAGE,
       } as StoredSession
 
@@ -6602,11 +6614,14 @@ export class SessionManager implements ISessionManager {
      * directly (tests, intra-server flows) to leave the existing pin in place.
      */
     rpcContext?: { callerClientId?: string },
+    /** Internal synchronous, throw-on-denial guard; never supplied by message options/RPC. */
+    authorize?: () => void,
   ): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed) {
       throw new Error(`Session ${sessionId} not found`)
     }
+    authorize?.()
     this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
 
     // Source-activation auto-retry dedup (craft-agents-oss#804). When the server
@@ -6639,6 +6654,7 @@ export class SessionManager implements ISessionManager {
 
     // Ensure messages are loaded before we try to add new ones
     await this.ensureMessagesLoaded(managed)
+    authorize?.()
 
     // If currently processing, behavior depends on the connection's
     // `midStreamBehavior` (resolved via {@link resolveMidStreamBehavior},
@@ -6660,7 +6676,7 @@ export class SessionManager implements ISessionManager {
       // queued right away, like any queued message, and the model decides in the background whether
       // it corrects the running work and should be steered in (steerQueuedIfDecided). Recording
       // first keeps send order and leaves the queue the single source of truth.
-      const decideDelivery = canSteerTextPayload(attachments, storedAttachments, options) && this.decisionFeatureActive('midTurnMessages')
+      const decideDelivery = !authorize && canSteerTextPayload(attachments, storedAttachments, options) && this.decisionFeatureActive('midTurnMessages')
       const behavior = decideDelivery ? 'queue' : configured
 
       // Create user message for UI
@@ -6675,6 +6691,12 @@ export class SessionManager implements ISessionManager {
         // transcript bubble (e.g. background-task-completion nudge).
         ...(options?.hidden ? { hidden: true } : {}),
       }
+      if (authorize) {
+        (managed.guardedMessageContents ??= new Map()).set(userMessage.id, message)
+        // Keep undelivered text out of every model-visible history consumer,
+        // including cold reconstruction, handoff summaries and retry setup.
+        userMessage.content = '[Companion message not delivered; authorization required.]'
+      }
       managed.messages.push(userMessage)
 
       const agent = managed.agent
@@ -6684,11 +6706,12 @@ export class SessionManager implements ISessionManager {
       // A manual compaction owns the turn: nothing consumes steers, so queue for
       // replay after `complete` instead of steering (OSS #1058). Not an interruption.
       const compactionInFlight = agent?.isCompactionInFlight?.() === true
-      const attemptedSteer = shouldAttemptMidStreamSteer(behavior, textOnly, agent)
+      const attemptedSteer = !authorize && shouldAttemptMidStreamSteer(behavior, textOnly, agent)
+      authorize?.()
       const steered = attemptedSteer && agent
         ? agent.redirect(message, { messageId: userMessage.id })
         : false
-      const payload: ManagedSession['messageQueue'][number] = { message, attachments, storedAttachments, options, messageId: userMessage.id, optimisticMessageId: options?.optimisticMessageId }
+      const payload: ManagedSession['messageQueue'][number] = { message, attachments, storedAttachments, options, messageId: userMessage.id, optimisticMessageId: options?.optimisticMessageId, authorize }
       if (steered && agent?.takePendingSteers) {
         (managed.acceptedSteers ??= new Map()).set(userMessage.id, payload)
       }
@@ -6714,7 +6737,7 @@ export class SessionManager implements ISessionManager {
         // queue-after-abort (backend already aborted) — the replay path in
         // processNextQueuedMessage is identical.
         managed.messageQueue.push(payload)
-        if (this.decisionFeatureActive('midTurnMessages')) payload.continuationCheck = this.markQueuedContinuation(managed, payload)
+        if (!authorize && this.decisionFeatureActive('midTurnMessages')) payload.continuationCheck = this.markQueuedContinuation(managed, payload)
         if (decideDelivery) void this.steerQueuedIfDecided(managed, payload, userMessage, configured)
         // Only claim interruption when a steer attempt actually aborted the
         // in-flight turn. In 'queue' mode the current turn runs to natural
@@ -6729,6 +6752,7 @@ export class SessionManager implements ISessionManager {
       // before we tell the renderer "accepted" — `persistSession` only
       // enqueues with a 500ms debounce. (#616 reliability fix.)
       await this.flushSession(managed.id)
+      authorize?.()
       onAck?.(userMessage.id, { delivery: delivery.shouldQueue ? 'queued' : 'delivered', targetBusy: true })
       return
     }
@@ -6754,6 +6778,12 @@ export class SessionManager implements ISessionManager {
         // Hidden system-generated messages reach the model but never render as a
         // transcript bubble (e.g. background-task-completion nudge).
         ...(options?.hidden ? { hidden: true } : {}),
+      }
+      if (authorize) {
+        (managed.guardedMessageContents ??= new Map()).set(userMessage.id, message)
+        // Keep undelivered text out of every model-visible history consumer,
+        // including cold reconstruction, handoff summaries and retry setup.
+        userMessage.content = '[Companion message not delivered; authorization required.]'
       }
       managed.messages.push(userMessage)
 
@@ -6783,7 +6813,7 @@ export class SessionManager implements ISessionManager {
       const isFirstUserMessage = managed.messages.filter(m => m.role === 'user').length === 1
       // Smart titles: the first message was small talk; title this one if the name is still automatic.
       const titlesDeferredMessage = !isFirstUserMessage && !options?.hidden && managed.titleDeferred && managed.name === managed.autoTitle
-      if ((isFirstUserMessage && !managed.name && !managed.triggeredBy) || titlesDeferredMessage) {
+      if (!authorize && ((isFirstUserMessage && !managed.name && !managed.triggeredBy) || titlesDeferredMessage)) {
         managed.titleDeferred = false
         // Replace bracket mentions with their display labels (e.g. [skill:ws:commit] -> "Commit")
         // so titles show human-readable names instead of raw IDs
@@ -6819,8 +6849,9 @@ export class SessionManager implements ISessionManager {
     // fresh and queued messages). Regex rules run synchronously here; semantic
     // rules (decision model) run fire-and-forget so they never delay the turn,
     // and merge their matches when they arrive.
+    // Guarded sends skip metadata automation: it must not act on undelivered text.
     // Hidden messages (auto-retries, system nudges) are not user-authored: they label nothing.
-    if (!options?.hidden) {
+    if (!authorize && !options?.hidden) {
       try {
         const labelTree = listLabels(managed.workspace.rootPath)
         this.applyAutoLabelMatches(managed, evaluateAutoLabels(message, labelTree, managed.labels ?? []), labelTree)
@@ -6833,6 +6864,7 @@ export class SessionManager implements ISessionManager {
     // No await between idle acknowledgement and claiming the turn. A sender
     // released by onAck can now dispatch again without starting a second stream.
     // The callback can still reject an unconfirmed durable write before we start.
+    authorize?.()
     if (!existingMessageId) onAck?.(userMessage.id, { delivery: 'delivered', targetBusy: false })
     managed.lastMessageAt = Date.now()
     this.setProcessing(managed, true)
@@ -6854,6 +6886,7 @@ export class SessionManager implements ISessionManager {
     // Store message/attachments for potential retry after auth refresh
     // (SDK subprocess caches token at startup, so if it expires mid-session,
     // we need to recreate the agent and retry the message)
+    managed.lastSentAuthorize = authorize
     managed.lastSentMessage = message
     managed.lastSentAttachments = attachments
     managed.lastSentStoredAttachments = storedAttachments
@@ -6931,7 +6964,8 @@ export class SessionManager implements ISessionManager {
       }
 
       // Decision-model checks for this turn run while the agent is set up below.
-      const preTurnDecisions = this.startPreTurnDecisions(managed, message, options, { activationResend, authRetry: _isAuthRetry, attachments })
+      // Guarded text must not reach suggestion/thinking decision side paths before authorization.
+      const preTurnDecisions = authorize ? null : this.startPreTurnDecisions(managed, message, options, { activationResend, authRetry: _isAuthRetry, attachments })
 
       const workspaceRootPath = managed.workspace.rootPath
       const enabledSlugs = managed.enabledSourceSlugs ?? []
@@ -6992,7 +7026,7 @@ export class SessionManager implements ISessionManager {
 
       sessionLog.info('Starting chat for session:', sessionId)
       sessionLog.info('Workspace:', JSON.stringify(managed.workspace, null, 2))
-      sessionLog.info('Message:', message)
+      sessionLog.info('Message:', authorize ? '[Guarded companion message]' : message)
       sessionLog.info('Agent model:', agent.getModel())
       sessionLog.info('process.cwd():', process.cwd())
 
@@ -7063,6 +7097,21 @@ export class SessionManager implements ISessionManager {
         ...(turnContext.length > 0 && !isCompactCommand ? { turnContext: turnContext.join('\n\n') } : {}),
       }
 
+      authorize?.()
+      // This is the accepted execution boundary. Restore original transcript
+      // text only after final authorization, without an intervening await.
+      let restoredGuardedMessage = false
+      for (const id of managed.lastSentMessageIds ?? []) {
+        const original = managed.guardedMessageContents?.get(id)
+        if (original === undefined) continue
+        const entry = managed.messages.find(m => m.id === id)
+        if (entry) {
+          entry.content = original
+          restoredGuardedMessage = true
+        }
+        managed.guardedMessageContents!.delete(id)
+      }
+      if (restoredGuardedMessage) this.persistSession(managed)
       sendSpan.mark('chat.starting')
       const chatIterator = agent.chat(message, modelInputAttachments.attachments, Object.keys(chatOptions).length > 0 ? chatOptions : undefined)
       sessionLog.info('Got chat iterator, starting iteration...')
@@ -7400,6 +7449,7 @@ export class SessionManager implements ISessionManager {
         const retryAttachments = managed.lastSentAttachments
         const retryStoredAttachments = managed.lastSentStoredAttachments
         const retryOptions = managed.lastSentOptions
+        const retryAuthorize = managed.lastSentAuthorize
 
         if (retryMessage) {
           sessionLog.info(`[auth-retry] Retrying message for session ${sessionId}`)
@@ -7426,7 +7476,10 @@ export class SessionManager implements ISessionManager {
             retryStoredAttachments,
             retryOptions,
             undefined,  // existingMessageId
-            true        // _isAuthRetry - prevents infinite retry loop
+            true,       // _isAuthRetry - prevents infinite retry loop
+            undefined,
+            undefined,
+            retryAuthorize,
           )
           sessionLog.info(`[auth-retry] Retry completed for session ${sessionId}`)
         } else {
@@ -7773,7 +7826,13 @@ export class SessionManager implements ISessionManager {
         next.attachments,
         next.storedAttachments,
         next.options,
-        next.messageId
+        next.messageId,
+        undefined,
+        undefined,
+        undefined,
+        [first, ...merged].some(entry => entry.authorize)
+          ? () => { for (const entry of [first, ...merged]) entry.authorize?.() }
+          : undefined,
       ).catch(err => {
         sessionLog.error('replay failed', {
           sessionId,
@@ -9553,6 +9612,7 @@ export class SessionManager implements ISessionManager {
 
         const { plain: messageWithSuffix, retry: retryMessage } = buildActivationRetryMessage(resendMessage, managed.turnSteers ?? [], event.sourceSlug)
         const messageCountAtSchedule = managed.messages.length
+        const retryAuthorize = managed.lastSentAuthorize
 
         // Stash the retry payload so a duplicate sendMessage from a legacy renderer
         // (mixed-version rollout: new server + v0.9.5 Electron client) gets deduped.
@@ -9583,7 +9643,7 @@ export class SessionManager implements ISessionManager {
           // Hidden: the user already sees their message and the activation; the retry only
           // restarts the turn with the new tools (and runs no per-message decision points).
           current.pendingActivationResend = retryMessage
-          this.sendMessage(sessionId, retryMessage, undefined, undefined, { hidden: true }).catch(err => {
+          this.sendMessage(sessionId, retryMessage, undefined, undefined, { hidden: true }, undefined, undefined, undefined, undefined, retryAuthorize).catch(err => {
             if (current.pendingActivationResend === retryMessage) current.pendingActivationResend = undefined
             sessionLog.error(`Auto-retry sendMessage failed for ${sessionId}:`, err)
           })
