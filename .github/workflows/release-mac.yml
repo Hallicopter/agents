@@ -39,6 +39,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./apps/electron/package.json').version")"
+          test "$GITHUB_REF_NAME" = "v$(node -p "require('./packages/shared/package.json').version")"
           for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!name}" ]; then echo "::error::Missing release secret: $name"; exit 1; fi
           done
@@ -52,6 +53,9 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ startsWith(github.ref, 'refs/tags/') && 'true' || 'false' }}
         run: |
           test "$(uname -m)" = arm64
+          if [[ "$GITHUB_REF" != refs/tags/* ]]; then
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          fi
           bash apps/electron/scripts/build-dmg.sh arm64
       - name: Verify packaged renderer origin
         run: node_modules/.bin/electron scripts/desktop/check-packaged-origin.cjs
