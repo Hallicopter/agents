@@ -1,0 +1,114 @@
+name: Scoville Mac release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_preview:
+        description: Publish an ad-hoc signed preview for manual installation
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scoville-mac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check release version and signing credentials
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test "$GITHUB_REF_NAME" = "v$(node -p "require('./apps/electron/package.json').version")"
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then echo "::error::Missing release secret: $name"; exit 1; fi
+          done
+      - name: Build Apple Silicon app
+        env:
+          CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/') && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ startsWith(github.ref, 'refs/tags/') && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ startsWith(github.ref, 'refs/tags/') && 'true' || 'false' }}
+        run: |
+          test "$(uname -m)" = arm64
+          bash apps/electron/scripts/build-dmg.sh arm64
+      - name: Verify packaged renderer origin
+        run: node_modules/.bin/electron scripts/desktop/check-packaged-origin.cjs
+      - name: Verify app bundle and fork update feed
+        run: |
+          codesign --verify --deep --strict --verbose=2 'apps/electron/release/mac-arm64/Scoville Agents.app'
+          bun -e 'const c=Bun.YAML.parse(await Bun.file("apps/electron/release/mac-arm64/Scoville Agents.app/Contents/Resources/app-update.yml").text()); if(c.provider!=="github"||c.owner!=="Hallicopter"||c.repo!=="agents")throw Error("Wrong update feed")'
+          cd apps/electron/release
+          shasum -a 256 *.dmg *.zip > SHA256SUMS
+      - name: Verify signed and notarized release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          APP='apps/electron/release/mac-arm64/Scoville Agents.app'
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+          xcrun stapler validate "$APP"
+          test -s apps/electron/release/latest-mac.yml
+      - name: Save installers and update manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: scoville-mac-arm64-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            apps/electron/release/*.dmg
+            apps/electron/release/*.zip
+            apps/electron/release/*.blockmap
+            apps/electron/release/latest-mac.yml
+            apps/electron/release/SHA256SUMS
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/') || inputs.publish_preview
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: scoville-mac-arm64-${{ github.sha }}
+          path: release
+      - name: Publish verified release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --title "Scoville Agents $GITHUB_REF_NAME" --generate-notes
+      - name: Publish preview for manual installation
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Download Scoville-Agents-arm64.dmg, open it, and drag Scoville Agents into Applications. Quit the previous app first. Your existing chats and settings are retained.
+
+          This Apple Silicon preview is ad-hoc signed, not Apple-notarized. It uses manual DMG updates; automatic installation is not supported for previews. If macOS cannot verify the developer, see Apple's per-app approval instructions: https://support.apple.com/en-us/102445
+
+          Built directly from the linked fork commit. SHA256SUMS is included for download verification.
+          NOTES
+          gh release create "scoville-preview-${GITHUB_SHA:0:12}" release/*.dmg release/*.zip release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Scoville Agents preview (${GITHUB_SHA:0:8})" --notes-file notes.md
