@@ -9,10 +9,10 @@ const scope = { workspaceId: 'ws', sessionId: 's' }
 const ctx = { workspaceId: 'ws', clientId: 'client', webContentsId: null }
 const origin = 'https://desktop.example.test'
 const renderer = 'http://localhost:5173'
-function fixture() {
+function fixture(electronOrigin?: 'null' | 'file://') {
   const dir = mkdtempSync(join(tmpdir(), 'desktop-runtime-'))
   const path = join(dir, 'config.json')
-  const config = { origin, rpcOrigin: renderer, upstream: { host: '127.0.0.1', port: 5902, passwordFile: join(dir, 'not-read') }, entitlements: [{ ...scope, expiresAt: new Date(Date.now() + 60000).toISOString() }] }
+  const config = { origin, rpcOrigin: renderer, ...(electronOrigin === undefined ? {} : { electronOrigin }), upstream: { host: '127.0.0.1', port: 5902, passwordFile: join(dir, 'not-read') }, entitlements: [{ ...scope, expiresAt: new Date(Date.now() + 60000).toISOString() }] }
   const save = () => writeFileSync(path, JSON.stringify(config), { mode: 0o600 })
   save()
   writeFileSync(`${path}.revoked`, '', { mode: 0o600 })
@@ -124,4 +124,14 @@ test('systemd credential namespace cannot be supplied by arbitrary config path',
     process.env.CREDENTIALS_DIRECTORY='/tmp/untrusted'
     expect(() => readSystemdDesktopCredential('/tmp/untrusted/desktop-vnc')).toThrow()
   } finally { if(old===undefined)delete process.env.CREDENTIALS_DIRECTORY;else process.env.CREDENTIALS_DIRECTORY=old }
+})
+
+for (const origin of ['null', 'file://'] as const) test(`packaged renderer origin ${origin} requires exact opt-in`, async () => {
+  const defaultRuntime = fixture()
+  const configured = fixture(origin)
+  try {
+    await expect(defaultRuntime.runtime.gateway.issueRpcGrant(ctx, 's', origin, () => true)).rejects.toThrow()
+    expect((await configured.runtime.gateway.issueRpcGrant(ctx, 's', origin, () => true)).mode).toBe('watch')
+    await expect(configured.runtime.gateway.issueRpcGrant(ctx, 's', origin === 'null' ? 'file://' : 'null', () => true)).rejects.toThrow()
+  } finally { defaultRuntime.close(); configured.close() }
 })

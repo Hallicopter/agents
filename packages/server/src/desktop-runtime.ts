@@ -7,6 +7,7 @@ import type { SessionManager } from '@craft-agent/server-core/sessions'
 export interface DesktopDeployment {
   origin: string
   rpcOrigin?: string
+  electronOrigin?: 'null' | 'file://'
   upstream: { host: string; port: number; passwordFile: string }
   control?: DesktopControlDeployment
   entitlements: Array<DesktopScope & { expiresAt: string; control?: boolean }>
@@ -73,6 +74,7 @@ export function createDesktopRuntime(path: string | undefined) {
   const load = () => {
     const config = JSON.parse(privateRead(path, 65536)) as DesktopDeployment
     if (!Array.isArray(config.entitlements) || config.entitlements.length > 100) throw new Error('Invalid desktop entitlements')
+    if (config.electronOrigin !== undefined && !['null', 'file://'].includes(config.electronOrigin)) throw new Error('Invalid Electron origin')
     return config
   }
   const initial = load()
@@ -98,6 +100,7 @@ export function createDesktopRuntime(path: string | undefined) {
     control: controlRuntime?.control,
     origin: initial.origin,
     rpcOrigin: initial.rpcOrigin,
+    electronOrigin: initial.electronOrigin,
     upstream: {
       host: initial.upstream.host, port: initial.upstream.port,
       password: async () => effectiveVncPassword(readSystemdDesktopCredential(initial.upstream.passwordFile)),

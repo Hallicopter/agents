@@ -75,8 +75,10 @@ extraMetadata:
 
 # Auto-update: electron-updater fetches from this URL for update manifests (.yml files)
 publish:
-  provider: generic
-  url: https://thecraftagents.com/electron/latest
+  provider: github
+  owner: Hallicopter
+  repo: agents
+  releaseType: release
 
 # Disable ASAR to avoid decompression overhead and click delays
 asar: false

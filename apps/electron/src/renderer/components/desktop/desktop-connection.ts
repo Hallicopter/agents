@@ -26,7 +26,7 @@ interface Options {
   timeoutMs?: number
 }
 
-const controlUnavailable = 'Control unavailable — desktop is busy or control is not enabled. Return to View only, or try Control again later.'
+const controlUnavailable = 'Control unavailable. Try again.'
 
 /** One explicit connection attempt. Disposal invalidates every async continuation, including
  * late grants/ready/connect events. Never retries, reconnects, or retains credentials. */
@@ -54,8 +54,8 @@ export function connectDesktop(options: Options): () => void {
   }
 
   options.onState({ phase: 'requesting', message: options.mode === 'control'
-    ? 'Requesting Control — waiting for the desktop to become available…'
-    : 'Opening View only…' })
+    ? 'Taking control…'
+    : 'Connecting…' })
   void (async () => {
     // Load code before opening the socket so the greeting cannot race the import.
     const createRfb = await options.loadRfb()
@@ -69,7 +69,7 @@ export function connectDesktop(options: Options): () => void {
     // Credentials exist only in this attempt's memory; never put them in a URL or log.
     socket.onopen = () => { if (active) { socket!.send(JSON.stringify({ token: grant.token })); grant.token = '' } }
     socket.addEventListener('error', () => finish('error', options.mode === 'control' ? controlUnavailable : 'Desktop unavailable. Check access and the secure gateway, then reconnect.'))
-    socket.addEventListener('close', () => finish('disconnected', 'Disconnected — reconnect in View only, or explicitly request Control again.'))
+    socket.addEventListener('close', () => finish('disconnected', 'Disconnected.'))
     socket.onmessage = event => {
       if (!active) return
       try {
@@ -79,7 +79,9 @@ export function connectDesktop(options: Options): () => void {
         const confirmedControl = options.mode === 'control' && ready.mode === 'control'
         // Old gateways confirm watch with {ready:true}; never mistake that for Control.
         if (options.mode === 'control' && !confirmedControl) throw new Error('Control not confirmed')
-        const controlExpiresAt = ready.controlExpiresAt
+        const duration = ready.controlDurationMs
+        const controlExpiresAt = duration === undefined ? ready.controlExpiresAt : Date.now() + duration
+        if (confirmedControl && duration !== undefined && (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0 || duration > 300_000)) throw new Error('Invalid control duration')
         if (confirmedControl && (typeof controlExpiresAt !== 'number' || !Number.isFinite(controlExpiresAt) || controlExpiresAt <= Date.now() || controlExpiresAt > Date.now() + 5 * 60_000)) throw new Error('Invalid control expiry')
         socket!.onmessage = null
         viewer = createRfb(socket!)
@@ -89,21 +91,19 @@ export function connectDesktop(options: Options): () => void {
         current.resizeSession = false
         current.showDotCursor = false
         current.focusOnClick = false
-        options.onState({ phase: 'connecting', message: 'Connecting to the existing desktop…', controlAvailable: false })
+        options.onState({ phase: 'connecting', message: 'Connecting…', controlAvailable: false })
         current.addEventListener('connect', () => {
           if (!active) { current.viewOnly = true; current.disconnect(); return }
           if (confirmedControl && controlExpiresAt <= Date.now()) { finish('disconnected', 'Control ended before connection completed. Return to View only.'); return }
           clearTimeout(timeout)
           current.viewOnly = !confirmedControl
           current.focusOnClick = confirmedControl
-          options.onState({ phase: confirmedControl ? 'control' : 'watch', message: confirmedControl
-            ? 'Control · click the desktop to use mouse and keyboard'
-            : 'View only · mouse and keyboard stay on this device', controlAvailable: options.mode === 'watch' && grant.controlAvailable === true, ...(confirmedControl ? { controlExpiresAt } : {}) })
+          options.onState({ phase: confirmedControl ? 'control' : 'watch', message: '', controlAvailable: options.mode === 'watch' && grant.controlAvailable === true, ...(confirmedControl ? { controlExpiresAt } : {}) })
           if (confirmedControl) {
             expiry = setTimeout(() => finish('disconnected', 'Control ended. Reconnect in View only, or explicitly request Control again.'), Math.max(0, controlExpiresAt - Date.now()))
           }
         })
-        current.addEventListener('disconnect', () => finish('disconnected', 'Disconnected — reconnect in View only, or explicitly request Control again.'))
+        current.addEventListener('disconnect', () => finish('disconnected', 'Disconnected.'))
         current.addEventListener('credentialsrequired', () => finish('error', 'Desktop authentication failed. Check the secure gateway, then reconnect.'))
         current.addEventListener('securityfailure', () => finish('error', 'Desktop authentication failed. Check the secure gateway, then reconnect.'))
       } catch { finish('error', options.mode === 'control' ? controlUnavailable : 'Desktop unavailable. Check access and the secure gateway, then reconnect.') }

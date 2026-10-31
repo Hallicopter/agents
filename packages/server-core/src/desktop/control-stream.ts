@@ -194,7 +194,7 @@ export function controlStream(ws: WebSocket, grant: ControlGrant, endpoint: Desk
     if (closing || !await grant.validate() || !arbiter.valid(lease) || ws.readyState !== 1) throw new Error('Control unavailable')
     if (closing || !grant.control.connected()) throw new Error('Control unavailable')
     ready = true
-    ws.send(JSON.stringify({ ready: true, mode: 'control', controlExpiresAt: expiresAt }))
+    ws.send(JSON.stringify({ ready: true, mode: 'control', controlExpiresAt: expiresAt, controlDurationMs: Math.max(0, expiresAt - Date.now()) }))
     send(version)
   })().catch(close)
 }
@@ -220,6 +220,7 @@ class ControlReader {
   private sink: ((data: Buffer) => void) | undefined
   constructor(socket: Socket) {
     socket.on('data', data => {
+      if (!Buffer.isBuffer(data)) { socket.destroy(); return }
       if (this.sink) { this.sink(data); return }
       if (this.buffer.length + data.length > 65536) { socket.destroy(); return }
       this.buffer = Buffer.concat([this.buffer, data]); this.waiter?.()

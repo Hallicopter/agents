@@ -95,7 +95,7 @@ rm -rf "$ELECTRON_DIR/release"
 # 2. Install dependencies
 echo "Installing dependencies..."
 cd "$ROOT_DIR"
-bun install
+bun install --frozen-lockfile
 
 # 3. Download Bun binary with checksum verification
 echo "Downloading Bun ${BUN_VERSION} for darwin-${ARCH}..."
@@ -215,10 +215,10 @@ echo "Packaging app with electron-builder..."
 cd "$ELECTRON_DIR"
 
 # Set up environment for electron-builder
-export CSC_IDENTITY_AUTO_DISCOVERY=true
+export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-true}"
 
 # Build electron-builder arguments
-BUILDER_ARGS="--mac --${ARCH}"
+BUILDER_ARGS="--mac --${ARCH} --publish never"
 
 # Add code signing if identity is available
 if [ -n "$APPLE_SIGNING_IDENTITY" ]; then

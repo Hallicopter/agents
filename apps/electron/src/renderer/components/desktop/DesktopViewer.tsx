@@ -15,7 +15,7 @@ function DesktopSurface({ workspaceId, sessionId }: Props) {
   const target = useRef<HTMLDivElement>(null)
   const dispose = useRef<(() => void) | null>(null)
   const [request, setRequest] = useState<{ id: number; mode: DesktopMode }>({ id: 0, mode: 'watch' })
-  const [state, setState] = useState<DesktopState>({ phase: 'requesting', message: 'Opening View only…' })
+  const [state, setState] = useState<DesktopState>({ phase: 'requesting', message: 'Connecting…' })
   const [controlAvailable, setControlAvailable] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [now, setNow] = useState(Date.now)
@@ -90,7 +90,7 @@ function DesktopSurface({ workspaceId, sessionId }: Props) {
     // from the prior generation cannot re-enable input after Return/close.
     dispose.current?.()
     window.electronAPI.setDesktopInputActive(false)
-    setState({ phase: 'requesting', message: mode === 'watch' ? 'Opening View only…' : 'Requesting Control — waiting for the desktop to become available…' })
+    setState({ phase: 'requesting', message: mode === 'watch' ? 'Connecting…' : 'Taking control…' })
     setRequest(previous => ({ id: previous.id + 1, mode }))
   }
 
@@ -114,11 +114,9 @@ function DesktopSurface({ workspaceId, sessionId }: Props) {
       <button aria-label={fullscreen ? 'Exit full screen' : 'Full screen'} title={fullscreen ? 'Exit full screen' : 'Full screen'} className="rounded p-2 hover:bg-foreground/5" onClick={() => { void toggleFullscreen() }}>{fullscreen ? <Minimize className="size-4" /> : <Maximize className="size-4" />}</button>
     </header>
     <div ref={target} className={`relative min-h-0 flex-1 overflow-hidden bg-background ${controlling ? '' : 'pointer-events-none'}`} aria-label={controlling ? 'Desktop display — click to control' : 'Desktop display — view only'} />
-    <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-xs">
-      <p role="status" aria-live="polite" aria-busy={busy}>{state.message}{controlling && <span aria-live="off"> · ends in {countdown} (5 min maximum)</span>}</p>
-      {!controlAvailable && !controlling && <p className="w-full text-muted-foreground">Control is not available on this server yet.</p>}
-      {!busy && !connected && <button className="rounded border px-3 py-1.5" onClick={() => changeMode('watch')}>Reconnect · View only</button>}
-      <p className="w-full text-muted-foreground">Same private desktop · no clipboard or file transfer · closing this window disconnects only this viewer</p>
-    </footer>
+    {(state.message || controlling || (!busy && !connected)) && <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-xs">
+      <p role="status" aria-live="polite" aria-busy={busy}>{state.message}{controlling && <span aria-live="off">{countdown}</span>}</p>
+      {!busy && !connected && <button className="rounded border px-3 py-1.5" onClick={() => changeMode('watch')}>Reconnect</button>}
+    </footer>}
   </div>
 }

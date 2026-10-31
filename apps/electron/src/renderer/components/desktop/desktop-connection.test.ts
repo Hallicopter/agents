@@ -214,7 +214,7 @@ describe('Desktop explicit connection lifecycle', () => {
   it('sanitizes backend busy/errors rather than leaking grants or raw errors', async () => {
     const h = harness('control', async () => { throw new Error('secret-token upstream-host') })
     await tick()
-    expect(h.states.at(-1)?.message).toContain('desktop is busy or control is not enabled')
+    expect(h.states.at(-1)?.message).toBe('Control unavailable. Try again.')
     expect(JSON.stringify(h.states)).not.toContain('secret-token')
     h.stop()
   })
@@ -228,3 +228,23 @@ describe('Desktop explicit connection lifecycle', () => {
     }
   })
 })
+
+ it('uses bounded server duration instead of requiring synchronized client clocks', async () => {
+  const h = harness('control')
+  await tick()
+  h.socket.ready({ ready: true, mode: 'control', controlExpiresAt: Date.now() + 3600000, controlDurationMs: 60000 })
+  h.rfb.emit('connect')
+  expect(h.states.at(-1)?.phase).toBe('control')
+  expect(h.states.at(-1)?.controlExpiresAt! - Date.now()).toBeLessThanOrEqual(60000)
+  h.stop()
+ })
+
+ it('rejects invalid server control durations', async () => {
+  for (const duration of [0, -1, 300001, '60000', null]) {
+    const h = harness('control')
+    await tick()
+    h.socket.ready({ ready: true, mode: 'control', controlExpiresAt: Date.now() + 60000, controlDurationMs: duration })
+    expect(h.states.at(-1)?.phase).toBe('error')
+    h.stop()
+  }
+ })

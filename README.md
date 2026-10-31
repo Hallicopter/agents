@@ -12,9 +12,13 @@
 
 This is [Hallicopter/agents](https://github.com/Hallicopter/agents), a maintained fork of [Craft Agents](https://github.com/lukilabs/craft-agents-oss). The current upstream baseline is **v0.15.6** (`8df01c5d`). Upstream history and documentation are retained below.
 
+### Install and update Scoville
+
+Use the fork’s [Releases page](https://github.com/Hallicopter/agents/releases) for the Mac app. Previews install from a DMG and update by replacing the app; signed in-app updates are pending Apple signing credentials. See [installation, updates, and maintainer release setup](docs/scoville-releases.md). No local development server is needed for a packaged client.
+
 ### Changes from upstream
 
-- **Scoville desktop window:** native movable/resizable Electron viewer and authenticated WebUI pop-out; simple View only/Control UI, with Control unavailable unless the server explicitly enables it. The optional brokered input implementation and proposed production cutover are documented in [desktop-viewer-fork.md](docs/desktop-viewer-fork.md).
+- **Scoville desktop window:** native movable/resizable Electron viewer and authenticated WebUI pop-out; simple View only/Control UI, with Control unavailable unless the server explicitly enables it. The optional brokered input implementation and verified production cutover are documented in [desktop-viewer-fork.md](docs/desktop-viewer-fork.md).
 - **Bounded workspace watching:** watches configuration directories without recursively following session artifacts, dependency trees, or browser socket links. Watch errors are handled instead of crashing the server.
 
 - **Safe session replacement:** synchronous and queued saves use unique temporary files and rename directly over the prior record, without deleting it first. Session listing never removes temporary files. Timer-triggered saves use the same serialization as explicit flushes, and shutdown flushing waits for active saves. Failed replacements preserve the old record and temporary data for recovery.

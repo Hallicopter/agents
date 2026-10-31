@@ -1,3 +1,13 @@
+# Current deployment and release status — 2026-10-31
+
+The user approved the production cutover. The existing server now runs the fork with the installed broker-aware CUA proxy and input-drain helper. The desktop/container/browser was not restarted. Actual 1440×900 viewing and control succeeded, including a held Shift release on disconnect, denial of agent input during control, and agent resumption after confirmed release. The actual noVNC UI also entered Control and rendered the live framebuffer. These checks do not establish Mac installer signing or client-specific compatibility.
+
+The viewer now shows the mode controls and, during Control, its countdown without explanatory footer boilerplate. A bounded server-relative duration avoids rejecting valid control solely because the client clock differs. The server continues to enforce the absolute deadline. Control remains explicit and limited to configured, expiring entitlements; it does not grant every session access.
+
+The updater now targets Hallicopter/agents GitHub Releases. See [install and release setup](scoville-releases.md); a signed Mac release is pending credentials. Historical sections below describe earlier implementation stages and are superseded by this status, including their statements about pending deployment approval and the unchanged upstream update feed.
+
+---
+
 # Scoville Agents — bounded Desktop viewer fork
 
 ## 31 October integration status

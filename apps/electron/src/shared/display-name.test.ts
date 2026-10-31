@@ -11,7 +11,7 @@ test('visible fork name preserves custom multi-instance display overrides', () =
 
 test('packaging separates cosmetic name from unchanged runtime path and bundle identity', () => {
   const config = Bun.YAML.parse(readFileSync(join(import.meta.dir, '../../electron-builder.yml'), 'utf8')) as {
-    productName: string; appId: string; extraMetadata: { productName: string }; publish: { provider: string; url: string }
+    productName: string; appId: string; extraMetadata: { productName: string }; publish: { provider: string; owner: string; repo: string; releaseType: string }
   }
   expect(config.productName).toBe(FORK_DISPLAY_NAME)
   expect(config.extraMetadata.productName).toBe(LEGACY_RUNTIME_NAME)
@@ -21,5 +21,5 @@ test('packaging separates cosmetic name from unchanged runtime path and bundle i
   for (const appData of ['/Users/example/Library/Application Support', '/custom/appData']) {
     expect(join(appData, config.extraMetadata.productName)).toBe(join(appData, LEGACY_RUNTIME_NAME))
   }
-  expect(config.publish).toEqual({ provider: 'generic', url: 'https://thecraftagents.com/electron/latest' })
+  expect(config.publish).toEqual({ provider: 'github', owner: 'Hallicopter', repo: 'agents', releaseType: 'release' })
 })
