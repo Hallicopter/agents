@@ -62,6 +62,7 @@ export async function createUnixInputBroker(arbiter: InputArbiter, socketPath: s
 
       const uncertain = () => {
         if (reservation) {
+          console.warn('[desktop-input] agent completion unconfirmed')
           const held = reservation
           reservation = undefined
           try { arbiter.finishAgent(held, false) } catch { /* finishAgent(false) deliberately throws after quarantining */ }

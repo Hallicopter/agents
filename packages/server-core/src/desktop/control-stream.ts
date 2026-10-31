@@ -24,7 +24,9 @@ export function controlStream(ws: WebSocket, grant: ControlGrant, endpoint: Desk
   const { arbiter } = options
   const deadline = Math.min(options.entitlementExpiresAt(grant.scope), Date.now() + 300_000)
   if (!Number.isSafeInteger(deadline) || deadline <= Date.now() || !grant.control.connected()) throw new Error('Control unavailable')
-  const lease = arbiter.acquireHuman({ ...grant.scope, connectionId: grant.control.connectionId }, deadline)
+  let lease: ReturnType<typeof arbiter.acquireHuman>
+  try { lease = arbiter.acquireHuman({ ...grant.scope, connectionId: grant.control.connectionId }, deadline) }
+  catch (error) { console.warn('[desktop-control] admission denied; phase=' + arbiter.state.phase); throw error }
   const upstream = connect(endpoint.port, endpoint.host)
   const reader = new ControlReader(upstream)
   const gate = new ControlRfbGate()
@@ -70,12 +72,12 @@ export function controlStream(ws: WebSocket, grant: ControlGrant, endpoint: Desk
         state.confirmReleased()
       }
       arbiter.finishRelease(lease, true)
-    })().catch(quarantine).finally(finish)
+    })().catch(() => { console.warn('[desktop-control] release proof failed'); quarantine() }).finally(finish)
   }
   function lost(): void {
     if (settled) return
     // A socket loss after ANY accepted input is ambiguous even if no keys are held.
-    if (accepted) quarantine()
+    if (accepted) { console.warn('[desktop-control] upstream lost after input'); quarantine() }
     barrier.fail()
     close()
   }
