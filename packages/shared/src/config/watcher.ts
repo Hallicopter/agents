@@ -2,7 +2,7 @@
  * Config File Watcher
  *
  * Watches configuration files for changes and triggers callbacks.
- * Uses recursive directory watching for simplicity and reliability.
+ * Watches bounded configuration directories without traversing user data.
  *
  * Watched paths:
  * - ~/.craft-agent/config.json - Main app configuration
@@ -16,6 +16,7 @@
  *   - permissions.json
  */
 
+import { watchWorkspaceConfig } from './workspace-watch.ts';
 import { watch, existsSync, readdirSync, statSync, readFileSync, mkdirSync } from 'fs';
 import { join, dirname, basename, relative } from 'path';
 import { platform } from 'os';
@@ -212,7 +213,7 @@ export function loadPreferences(): UserPreferences | null {
 export class ConfigWatcher {
   private workspaceId: string;
   private callbacks: ConfigWatcherCallbacks;
-  private watchers: FSWatcher[] = [];
+  private watchers: Array<Pick<FSWatcher, "close">> = [];
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private isRunning = false;
 
@@ -391,6 +392,7 @@ export class ConfigWatcher {
         }
       });
 
+      watcher.on('error', error => debug('[ConfigWatcher] Watch error:', error));
       this.watchers.push(watcher);
       debug('[ConfigWatcher] Watching global configs:', CONFIG_DIR);
     } catch (error) {
@@ -402,21 +404,10 @@ export class ConfigWatcher {
    * Watch workspace directory recursively
    */
   private watchWorkspaceDir(): void {
-    debug('[ConfigWatcher] Setting up workspace watcher for:', this.workspaceDir);
-    try {
-      const watcher = watch(this.workspaceDir, { recursive: true }, (eventType, filename) => {
-        if (!filename) return;
-
-        // Normalize path separators
-        const normalizedPath = filename.replace(/\\/g, '/');
-        this.handleWorkspaceFileChange(normalizedPath, eventType);
-      });
-
-      this.watchers.push(watcher);
-      debug('[ConfigWatcher] Watching workspace recursively:', this.workspaceDir);
-    } catch (error) {
-      debug('[ConfigWatcher] Error watching workspace directory:', error);
-    }
+    const watcher = watchWorkspaceConfig(this.workspaceDir,
+      (path, event) => this.handleWorkspaceFileChange(path, event),
+      error => debug('[ConfigWatcher] Workspace watch error:', error));
+    this.watchers.push(watcher);
   }
 
   /**
@@ -1044,6 +1035,7 @@ export class ConfigWatcher {
         }
       });
 
+      watcher.on('error', error => debug('[ConfigWatcher] Watch error:', error));
       this.watchers.push(watcher);
       debug('[ConfigWatcher] Watching app themes directory:', themesDir);
     } catch (error) {
@@ -1073,6 +1065,7 @@ export class ConfigWatcher {
         }
       });
 
+      watcher.on('error', error => debug('[ConfigWatcher] Watch error:', error));
       this.watchers.push(watcher);
       debug('[ConfigWatcher] Watching app permissions directory:', permissionsDir);
     } catch (error) {
