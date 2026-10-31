@@ -46,7 +46,7 @@ noVNC is pinned to 1.5.0 because npm 1.6.0's CommonJS `lib/util/browser.js` cont
 - Initial socket authorization has a 5-second termination deadline. Every entitlement callback is bounded to 2 seconds. Active checks run each second: denial/error/hang destroys upstream and closes viewing (up to approximately 3 seconds for polling + timeout). Explicit `revoke(scope)` immediately terminates matching viewers and outstanding grants. Host session-stop/deletion/authorization events **must call revoke**; reconnect never silently grants access. Maximum stream lifetime 5 minutes, requiring explicit reopen.
 - Gateway terminates upstream authentication, advertises downstream None only *after* grant and upstream authentication, and requires **shared ClientInit=1**. It cannot evict an existing desktop user via exclusive ClientInit.
 - Stateful client parser handles fragmentation/coalescing, forwards only validated SetPixelFormat and FramebufferUpdateRequest, rewrites SetEncodings to Raw only, rejects keyboard/pointer/clipboard/resize/file-transfer/extensions and unknown message types. Failed parsers remain failed. noVNC `viewOnly` is only UX, not enforcement.
-- Return-path parser strips ServerCutText (clipboard contents), bounds/drops unsupported messages and encodings. Whole Raw framebuffer update limit is **16 MiB**, at most 128 rectangles; oversized updates fail closed. Typical 1920×1080/1200 fits; **4K full-frame 32-bit updates do not**. Upstream advertised dimension cap of 8192 is an invalid-input bound, not a supported-resolution promise. Raw encoding uses more bandwidth than compressed VNC; keep this bounded MVP private.
+- Return-path parser strips ServerCutText (clipboard contents), bounds/drops unsupported messages and encodings. Whole Raw framebuffer update limit is **16 MiB**, at most 4096 rectangles; oversized updates fail closed. Typical 1920×1080/1200 fits; **4K full-frame 32-bit updates do not**. Upstream advertised dimension cap of 8192 is an invalid-input bound, not a supported-resolution promise. Raw encoding uses more bandwidth than compressed VNC; keep this bounded MVP private.
 - Client queue 64 KiB, WS buffered output limit 4 MiB, 10-second RFB handshake deadline. Closing the viewer destroys only its TCP connection, not the desktop/container/profile.
 
 ## Existing desktop hookup — requires separate approval
@@ -187,3 +187,7 @@ Config/journal stay strictprivate. No source chmod/chown/ACL change is made.
 Run optional root-only synthetic metadata regressions with
 `sudo bun test packages/server/src/desktop-credential-root.test.ts`; tests use
 only temporary dummy strings under `/run/credentials`, never real secrets.
+
+## Scrolling disconnect fix
+
+The original 128-rectangle framebuffer bound rejected normal tiled updates during scrolling, disconnected Control, and quarantined input after input had been accepted. The parser now accepts up to 4096 rectangles while retaining the 16 MiB frame bound and strict Raw-only decoding. Fragmented 600-tile updates and a subsequent release Fence are covered by regression tests.

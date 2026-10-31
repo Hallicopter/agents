@@ -37,3 +37,31 @@ describe('gateway-owned Fence synchronization', () => {
     expect(() => new ControlServerGate(() => {}).push(Buffer.from([248,0,0,0,0,0,0,1,65]))).toThrow()
   })
 })
+
+for (const mode of ['watch', 'control'] as const) test(`${mode} accepts fragmented tiled screen updates after scrolling`, () => {
+  const fences: Buffer[] = []
+  const gate = mode === 'watch' ? new WatchServerGate() : new ControlServerGate(b => fences.push(b))
+  const count = 600, pixels = 32 * 32 * 4
+  const frame = Buffer.alloc(4 + count * (12 + pixels))
+  frame.writeUInt16BE(count, 2)
+  for (let i = 0; i < count; i++) {
+    const offset = 4 + i * (12 + pixels)
+    frame.writeUInt16BE((i % 30) * 32, offset)
+    frame.writeUInt16BE(Math.floor(i / 30) * 32, offset + 2)
+    frame.writeUInt16BE(32, offset + 4); frame.writeUInt16BE(32, offset + 6)
+  }
+  const output: Buffer[] = []
+  for (let offset = 0; offset < frame.length; offset += 16384) output.push(...gate.push(frame.subarray(offset, offset + 16384)))
+  expect(output).toEqual([frame])
+  if (mode === 'control') {
+    expect(gate.push(fencePacket(1, Buffer.from('release')))).toEqual([])
+    expect(fences).toHaveLength(1)
+  }
+  expect(gate.push(Buffer.from([2]))).toEqual([Buffer.from([2])])
+})
+test('tiled updates remain bounded by rectangle count and total frame size', () => {
+  const tooMany = Buffer.alloc(4); tooMany.writeUInt16BE(4097, 2)
+  expect(() => new WatchServerGate().push(tooMany)).toThrow('Rectangle limit')
+  const huge = Buffer.alloc(16); huge.writeUInt16BE(1, 2); huge.writeUInt16BE(4096, 8); huge.writeUInt16BE(4096, 10)
+  expect(() => new WatchServerGate().push(huge)).toThrow('Framebuffer limit')
+})

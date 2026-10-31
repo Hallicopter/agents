@@ -19,7 +19,7 @@ export class RfbServerGate {
         if (b[0] === 0) {
           if (b.length < 4) break
           const rectangles = b.readUInt16BE(2)
-          if (rectangles > 128) throw new Error('Rectangle limit')
+          if (rectangles > 4096) throw new Error('Rectangle limit')
           size = 4
           let complete = true
           for (let i = 0; i < rectangles; i++) {
