@@ -139,7 +139,7 @@ export function controlStream(ws: WebSocket, grant: ControlGrant, endpoint: Desk
           write(message[0] === 2 ? controlEncodings() : message)
         }
       }
-    } catch { close() }
+    } catch (error) { console.warn("[desktop-control] client parser: " + (error instanceof Error ? error.message : "invalid")); close() }
   })
 
   let serverInit: Buffer | undefined
@@ -162,7 +162,7 @@ export function controlStream(ws: WebSocket, grant: ControlGrant, endpoint: Desk
         if (early.length < size) return
         serverGate.push(early.subarray(0, size)); early = early.subarray(size)
       }
-    } catch { if (accepted) quarantine(); barrier.fail(); close() }
+    } catch (error) { console.warn("[desktop-control] server parser: " + (error instanceof Error ? error.message : "invalid")); if (accepted) quarantine(); barrier.fail(); close() }
   }
   void (async () => {
     expiresAt = arbiter.state.humanExpiresAt!

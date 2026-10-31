@@ -281,6 +281,7 @@ export class InputArbiter {
   }
 
   #fail(): never {
+    console.warn('[desktop-input] quarantine origin', new Error().stack)
     this.#phase = 'quarantine'
     throw new InputArbiterError('quarantined')
   }
