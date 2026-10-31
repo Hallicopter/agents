@@ -31,7 +31,7 @@ import type { Workspace } from "../../../shared/types"
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher"
 import { CompactWorkspaceSwitcher } from "./CompactWorkspaceSwitcher"
 import { getDocUrl } from "@craft-agent/shared/docs/doc-links"
-import { DesktopViewer } from "../desktop/DesktopViewer"
+import { toast } from "sonner"
 import { AppMenu } from "../AppMenu"
 
 const RIGHT_SLOT_FULL_BADGES_THRESHOLD = 420
@@ -88,7 +88,6 @@ export function TopBar({
   isCompact,
 }: TopBarProps) {
   const { t } = useTranslation()
-  const [desktopOpen, setDesktopOpen] = useState(false)
   const [maxVisibleBrowserBadges, setMaxVisibleBrowserBadges] = useState(3)
   const rightSlotRef = useRef<HTMLDivElement | null>(null)
 
@@ -244,9 +243,14 @@ export function TopBar({
               <SquarePenRounded className="h-3.5 w-3.5" />
               {t("session.newSessionInPanel")}
             </StyledDropdownMenuItem>
-            <StyledDropdownMenuItem onClick={() => setDesktopOpen(true)}>
+            <StyledDropdownMenuItem disabled={!activeWorkspaceId || !activeSessionId} onClick={() => {
+              if (!activeSessionId) return
+              void window.electronAPI.openDesktopWindow(activeSessionId).catch(() => {
+                toast.error(isWebUI ? 'Allow pop-ups for this site to open Desktop' : 'Could not open Desktop. Try again from a selected session.')
+              })
+            }}>
               <Icons.Monitor className="h-3.5 w-3.5" />
-              Desktop · watch only
+              Desktop
             </StyledDropdownMenuItem>
             <StyledDropdownMenuItem onClick={onAddBrowserPanel}>
               <Icons.Globe className="h-3.5 w-3.5" />
@@ -303,7 +307,6 @@ export function TopBar({
       </div>
       )}
       </div>
-      <DesktopViewer key={`${activeWorkspaceId}:${activeSessionId}`} open={desktopOpen} onOpenChange={setDesktopOpen} workspaceId={activeWorkspaceId} sessionId={activeSessionId} />
     </div>
   )
 }

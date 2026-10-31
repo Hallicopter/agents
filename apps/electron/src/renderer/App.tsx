@@ -83,6 +83,7 @@ import { getFileManagerName } from '@/lib/platform'
 import { rendererLog } from '@/lib/logger'
 import { ActionRegistryProvider } from '@/actions'
 import { toast } from 'sonner'
+import { DesktopWindow } from '@/components/desktop/DesktopWindow'
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'ready'
 
@@ -303,6 +304,12 @@ function SessionLoadErrorScreen({
 }
 
 export default function App() {
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('desktopWindow') === 'true') return <DesktopWindow sessionId={params.get('desktopSessionId')} />
+  return <MainApp />
+}
+
+function MainApp() {
   const { t } = useTranslation()
 
   // Initialize renderer perf tracking early (debug mode = running from source)

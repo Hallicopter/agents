@@ -1,5 +1,23 @@
 # Scoville Agents — bounded Desktop viewer fork
 
+## 31 October integration status
+
+The native Electron window and WebUI pop-out are implemented with explicit View only/Control states, capability discovery, scope isolation, bounded control expiry, and immediate input disable on disconnect. Legacy watch-only servers do not advertise Control. The bounded workspace watcher no longer descends into arbitrary browser profiles or session artifacts; this fixes the diagnostic-browser socket crash loop.
+
+The optional control transport now has a shared input arbiter, Unix broker, agent client, persistent dirty-state quarantine, held-input tracking, same-connection RFB Fence handling, and a mandatory host drain callback. `packages/server/src/desktop-control-runtime.ts` wires host configuration when `control` is explicitly present. It checks cooperative ownership and rejects unregistered legacy proxy processes. **Production control is not enabled by this commit.** Socket fixture tests establish transport/release behavior, not live desktop handoff correctness. Direct VNC clients remain outside the broker; this is not a global lock against arbitrary local processes or direct VNC users.
+
+### Proposed production cutover (approval pending)
+
+1. Preserve the installed CUA proxy, deployment JSON, and application revision; never reset the revocation or dirty-state journals during rollback.
+2. Build `packages/server-core/src/desktop/cua-broker-client.ts` with Bun (`--target=node --format=esm`) into a root-owned `/usr/local/libexec/scoville-cua-broker-client.mjs`. Apply the reviewed `scripts/desktop/cua-proxy.patch` to `/usr/local/libexec/cua-container-structured-proxy.mjs`. The proposal has been dry-run only. Agent calls then require a live broker; unavailable/uncertain input fails closed rather than bypassing it.
+3. Install the fixed `scripts/desktop/input-drain.sh` root-owned as `/usr/local/libexec/scoville-desktop-input-drain`. It runs only a bounded XOpenDisplay→XSync→XCloseDisplay roundtrip on the existing container/display, without input, cookie/profile reads, or desktop restart. Its read-only auth probe succeeded. Establish exact installed-server ordering and live handoff evidence before enabling Control; a generic XSync success alone does not prove pointer-release ordering.
+4. In the existing private desktop deployment directory, preprovision a private `input-journal.json` with `{ "version": 1, "dirty": false }` only after proving no outstanding input. Configure `control` with absolute `socketPath`, `journalPath`, `ownerFile`, `proxyPath`, and `drainHelper`. Socket and journal must share the private directory. Use the existing cooperative owner file; never clear someone else's ownership. Add `control:true` only to the already-authorized Jolokia workspace/session entitlement, with an explicit bounded expiration.
+5. Coordinate a Craft server restart and drain old unbrokered proxies. Do not restart the desktop/container/browser. Verify old proxies cannot issue input, test a harmless actual takeover/release, check held-key/button cleanup and agent resumption, then verify view-only mode again. Any ambiguous release quarantines agent input; do not clear a dirty journal merely to restore availability.
+6. Roll back by disabling the optional control configuration and restoring the saved proxy only after proving no outstanding human input; retain the current revocation/dirty journals. A crash may leave the private broker socket behind: investigate ownership before removing it, never blindly delete an existing socket.
+
+Approval review blocked the live-proxy cutover; repository preparation and synthetic validation continued. This section supersedes historical progress/approval statements below, which record the earlier watch-only implementation.
+
+
 ## What is implemented (and what is not)
 
 The shared Electron/WebUI top bar **+ → Desktop · watch only** opens a bundled noVNC panel. `desktop:grant` uses the existing authenticated workspace RPC/preload adapter; only a single-use viewer grant and public WSS route reach the renderer, never an admin bearer or VNC password. The gateway is injectable into the existing `WsRpcServer`/headless bootstrap and optional WebUI HTTP handler. **It is absent from live startup/configuration by default.** Unconfigured clients show unavailable; desktop HTTP/upgrade routes fail closed.

@@ -10,6 +10,8 @@ This file accumulates release notes for the next unreleased version. PRs that ad
 
 ## Improvements
 
+- **Desktop in its own window** — Open the existing private desktop in a movable, resizable, minimizable native window, with a scaled full-window display and a WebUI pop-out equivalent. Viewing starts in View only; the simple Control toggle remains unavailable unless the server explicitly supports and confirms it. Closing the window disconnects only the viewer, not the desktop or agent.
+
 - **Scoville Agents display name** — The fork uses a distinct visible macOS app/window/installer name. Bundle ID, data paths, protocol and updater behavior remain unchanged; the official update feed can still replace fork changes.
 
 ## Bug Fixes

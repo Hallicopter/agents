@@ -114,6 +114,7 @@ if (tlsCertPath || tlsKeyPath) {
 
 // Explicit opt-in operator deployment; password is never placed in configuration.
 const desktopRuntime = createDesktopRuntime(process.env.CRAFT_DESKTOP_CONFIG)
+await desktopRuntime?.ready
 
 // Web UI configuration
 const webuiDir = process.env.CRAFT_WEBUI_DIR || undefined
@@ -351,7 +352,7 @@ if (!isLocalBind && instance.protocol === 'ws') {
 }
 
 const shutdown = async () => {
-  desktopRuntime?.dispose()
+  await desktopRuntime?.dispose()
   webuiHandler?.dispose()
   healthServer?.stop()
   if (messagingHandle) {

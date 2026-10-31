@@ -1,71 +1,124 @@
 import { useEffect, useRef, useState } from 'react'
-import { Monitor, LockKeyhole } from 'lucide-react'
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
+import { Maximize, Minimize, Monitor } from 'lucide-react'
+import { connectDesktop, type DesktopMode, type DesktopState } from './desktop-connection'
 
-interface Props { open: boolean; onOpenChange: (open: boolean) => void; workspaceId: string | null; sessionId?: string | null }
+interface Props { workspaceId: string; sessionId: string }
 
-/** Shared Electron/WebUI shell. Grants use the existing authenticated workspace RPC.
- * No URL entry, credentials, clipboard, takeover, or automatic reconnection.
- */
-export function DesktopViewer({ open, onOpenChange, workspaceId, sessionId }: Props) {
+/** Full-window surface shared by Electron and WebUI. The scope key ensures that a
+ * new session always starts in View only, never carrying a previous Control intent. */
+export function DesktopViewer(props: Props) {
+  return <DesktopSurface key={`${props.workspaceId}:${props.sessionId}`} {...props} />
+}
+
+function DesktopSurface({ workspaceId, sessionId }: Props) {
+  const root = useRef<HTMLDivElement>(null)
   const target = useRef<HTMLDivElement>(null)
-  const [attempt, setAttempt] = useState(0)
-  const [status, setStatus] = useState('Not connected')
-  const [busy, setBusy] = useState(false)
+  const dispose = useRef<(() => void) | null>(null)
+  const [request, setRequest] = useState<{ id: number; mode: DesktopMode }>({ id: 0, mode: 'watch' })
+  const [state, setState] = useState<DesktopState>({ phase: 'requesting', message: 'Opening View only…' })
+  const [controlAvailable, setControlAvailable] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+  const [now, setNow] = useState(Date.now)
+  const controlling = state.phase === 'control'
+  const busy = state.phase === 'requesting' || state.phase === 'connecting'
+  const connected = controlling || state.phase === 'watch'
+
   useEffect(() => {
-    if (!open || !attempt || !workspaceId || !sessionId) return
     const container = target.current
     if (!container) return
-    let cancelled = false
-    let socket: WebSocket | undefined
-    let rfb: { disconnect(): void } | undefined
-    const timeout = setTimeout(() => { if (cancelled) return; cancelled = true; rfb?.disconnect(); socket?.close(); setStatus('Desktop unavailable — connection timed out'); setBusy(false) }, 15_000)
-    setBusy(true)
-    setStatus('Requesting private watch-only access…')
-    void (async () => {
-      // Load code before opening the socket so the greeting cannot race the import.
-      // @ts-expect-error noVNC does not ship TypeScript declarations
-      const { default: RFB } = await import('@novnc/novnc/lib/rfb.js')
-      if (cancelled) return
-      const { token, url } = await window.electronAPI.getDesktopViewerGrant(sessionId, location.origin)
-      const endpoint = new URL(url)
-      if (endpoint.protocol !== 'wss:' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || endpoint.pathname !== '/api/desktop/view') throw new Error('Invalid endpoint')
-      if (cancelled || typeof token !== 'string') return
-      socket = new WebSocket(url)
-      socket.onopen = () => socket!.send(JSON.stringify({ token }))
-      socket.onmessage = event => {
-        if (cancelled) return
-        try {
-          if (typeof event.data !== 'string' || JSON.parse(event.data).ready !== true) throw new Error()
-          const viewer = new RFB(container, socket, { shared: true })
-          rfb = viewer
-          viewer.viewOnly = true // UX only — gateway independently enforces read-only.
-          viewer.scaleViewport = true
-          viewer.resizeSession = false
-          viewer.showDotCursor = false
-          viewer.addEventListener('connect', () => { clearTimeout(timeout); setStatus('Watching · read-only'); setBusy(false) })
-          viewer.addEventListener('disconnect', () => { clearTimeout(timeout); if (!cancelled) { setStatus('Disconnected — reconnect explicitly'); setBusy(false) } })
-          viewer.addEventListener('credentialsrequired', () => viewer.disconnect())
-        } catch { socket?.close(); setStatus('Desktop unavailable'); setBusy(false) }
-      }
-      socket.onerror = () => { if (!cancelled) { setStatus('Desktop unavailable'); setBusy(false) } }
-      socket.onclose = () => { clearTimeout(timeout); if (!cancelled) { setStatus('Disconnected — reconnect explicitly'); setBusy(false) } }
-    })().catch(() => { clearTimeout(timeout); if (!cancelled) { setStatus('Desktop unavailable — secure gateway is not configured or access was denied'); setBusy(false) } })
-    return () => { cancelled = true; clearTimeout(timeout); rfb?.disconnect(); socket?.close(); container.replaceChildren() }
-  }, [open, attempt, workspaceId, sessionId])
+    const disconnect = connectDesktop({
+      mode: request.mode,
+      grant: () => window.electronAPI.getDesktopViewerGrant(sessionId, location.origin, request.mode),
+      loadRfb: async () => {
+        // @ts-expect-error noVNC does not ship TypeScript declarations
+        const { default: RFB } = await import('@novnc/novnc/lib/rfb.js')
+        return socket => new RFB(container, socket, { shared: true })
+      },
+      onState: next => {
+        // Only a current successful watch grant can advertise this UX capability.
+        // Server grant/socket confirmation remain the independent auth boundary.
+        if (request.mode === 'watch') setControlAvailable(next.phase === 'watch' && next.controlAvailable === true)
+        setState(next)
+      },
+    })
+    dispose.current = disconnect
+    const stop = () => { disconnect(); window.electronAPI.setDesktopInputActive(false) }
+    window.addEventListener('pagehide', stop)
+    return () => {
+      stop()
+      window.removeEventListener('pagehide', stop)
+      container.replaceChildren()
+      if (dispose.current === disconnect) dispose.current = null
+    }
+  }, [request, workspaceId, sessionId])
 
-  // Scope changes close the prior stream; never silently attach to another session.
-  useEffect(() => { setAttempt(0); setBusy(false); setStatus('Not connected') }, [open, workspaceId, sessionId])
-  return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="sm:max-w-5xl">
-      <DialogTitle className="flex items-center gap-2"><Monitor className="size-5" /> Desktop <span className="text-xs text-muted-foreground">Watch only</span></DialogTitle>
-      <DialogDescription>View the existing private desktop. Viewing does not take control, change the signed-in profile, or stop existing CUA tools.</DialogDescription>
-      <div ref={target} className="h-[55vh] min-h-64 overflow-hidden rounded-lg bg-background" aria-label="Read-only desktop display" />
-      <div className="flex items-center justify-between gap-4 text-sm">
-        <p role="status" className="flex items-center gap-2"><LockKeyhole className="size-4 shrink-0" />{!sessionId ? 'Select a session to view its entitled desktop' : status}</p>
-        <button className="shrink-0 rounded-md border px-3 py-2 disabled:opacity-40" disabled={!workspaceId || !sessionId || busy} onClick={() => setAttempt(n => n + 1)}>Open watch viewer</button>
+  // No AppShell/action-registry keyboard handlers run in this window. Only a
+  // focused, confirmed-control canvas bypasses local native menu accelerators.
+  useEffect(() => {
+    const update = () => window.electronAPI.setDesktopInputActive(controlling && document.hasFocus() && !!target.current?.contains(document.activeElement))
+    document.addEventListener('focusin', update)
+    document.addEventListener('focusout', update)
+    window.addEventListener('focus', update)
+    window.addEventListener('blur', update)
+    update()
+    return () => {
+      document.removeEventListener('focusin', update)
+      document.removeEventListener('focusout', update)
+      window.removeEventListener('focus', update)
+      window.removeEventListener('blur', update)
+      window.electronAPI.setDesktopInputActive(false)
+    }
+  }, [controlling])
+
+  useEffect(() => {
+    if (!controlling) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [controlling])
+
+  useEffect(() => {
+    const update = () => setFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', update)
+    return () => document.removeEventListener('fullscreenchange', update)
+  }, [])
+
+  function changeMode(mode: DesktopMode) {
+    if (mode === 'control' && !controlAvailable) return // preserve the working watch stream
+    if (mode === 'watch') setControlAvailable(false)
+    // Immediate fail-closed downgrade, before React effects/RPCs run. A late ready
+    // from the prior generation cannot re-enable input after Return/close.
+    dispose.current?.()
+    window.electronAPI.setDesktopInputActive(false)
+    setState({ phase: 'requesting', message: mode === 'watch' ? 'Opening View only…' : 'Requesting Control — waiting for the desktop to become available…' })
+    setRequest(previous => ({ id: previous.id + 1, mode }))
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen()
+      else await root.current?.requestFullscreen()
+    } catch { /* Native maximize/resize remains available when fullscreen is unsupported. */ }
+  }
+
+  const remainingSeconds = Math.max(0, Math.ceil(((state.controlExpiresAt ?? now) - now) / 1000))
+  const countdown = `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, '0')}`
+
+  return <div ref={root} className="flex h-dvh min-h-0 flex-col bg-background text-foreground">
+    <header className="flex shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3">
+      <h1 className="mr-auto flex items-center gap-2 text-sm font-medium"><Monitor className="size-4" />Desktop</h1>
+      <div role="group" aria-label="Desktop interaction" className="flex rounded-md border p-0.5 text-sm">
+        <button aria-pressed={!controlling} className={`rounded px-3 py-1.5 ${!controlling ? 'bg-foreground/10 font-medium' : ''}`} onClick={() => changeMode('watch')} disabled={state.phase === 'watch' || (busy && request.mode === 'watch')}>View only</button>
+        <button aria-pressed={controlling} title={controlAvailable ? 'Request Control' : 'Control is not available on this server yet.'} className={`rounded px-3 py-1.5 disabled:opacity-40 ${controlling ? 'bg-foreground/10 font-medium' : ''}`} onClick={() => changeMode('control')} disabled={!controlAvailable || controlling || busy}>Control</button>
       </div>
-      <p className="text-xs text-muted-foreground">Deployment is disabled by default. No clipboard, keyboard, mouse input, or desktop resizing. Closing this panel disconnects only this viewer.</p>
-    </DialogContent>
-  </Dialog>
+      <button aria-label={fullscreen ? 'Exit full screen' : 'Full screen'} title={fullscreen ? 'Exit full screen' : 'Full screen'} className="rounded p-2 hover:bg-foreground/5" onClick={() => { void toggleFullscreen() }}>{fullscreen ? <Minimize className="size-4" /> : <Maximize className="size-4" />}</button>
+    </header>
+    <div ref={target} className={`relative min-h-0 flex-1 overflow-hidden bg-background ${controlling ? '' : 'pointer-events-none'}`} aria-label={controlling ? 'Desktop display — click to control' : 'Desktop display — view only'} />
+    <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-xs">
+      <p role="status" aria-live="polite" aria-busy={busy}>{state.message}{controlling && <span aria-live="off"> · ends in {countdown} (5 min maximum)</span>}</p>
+      {!controlAvailable && !controlling && <p className="w-full text-muted-foreground">Control is not available on this server yet.</p>}
+      {!busy && !connected && <button className="rounded border px-3 py-1.5" onClick={() => changeMode('watch')}>Reconnect · View only</button>}
+      <p className="w-full text-muted-foreground">Same private desktop · no clipboard or file transfer · closing this window disconnects only this viewer</p>
+    </footer>
+  </div>
 }

@@ -1,0 +1,34 @@
+--- a/cua-container-structured-proxy.mjs
++++ b/cua-container-structured-proxy.mjs
+@@ -1,4 +1,6 @@
+ #!/usr/bin/node
++import { readFileSync } from 'node:fs';
++import { createCuaBrokerClient } from '/usr/local/libexec/scoville-cua-broker-client.mjs';
+ import { Server } from '/home/advait/craft-agents-oss/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js';
+ import { StdioServerTransport } from '/home/advait/craft-agents-oss/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js';
+ import { Client } from '/home/advait/craft-agents-oss/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
+@@ -15,10 +17,16 @@
+ });
+ const upstream = new Client({name:'craft-cua-structured-proxy',version:'1.0.0'});
+ await upstream.connect(upstreamTransport);
++const procStat = readFileSync('/proc/self/stat', 'utf8');
++const broker = await createCuaBrokerClient({
++  socketPath: '/home/advait/.craft-agent/desktop-viewer/input.sock',
++  pid: process.pid, startTime: procStat.slice(procStat.lastIndexOf(')') + 2).split(' ')[19],
++  upstream: (name, args) => upstream.callTool({name, arguments: args ?? {}}),
++});
+ const server = new Server({name:'craft-cua-structured-proxy',version:'1.0.0'},{capabilities:{tools:{}}});
+ server.setRequestHandler(ListToolsRequestSchema, async () => await upstream.listTools());
+ server.setRequestHandler(CallToolRequestSchema, async (request) => {
+-  const result = await upstream.callTool({name:request.params.name,arguments:request.params.arguments ?? {}});
++  const result = await broker.callTool(request.params.name, request.params.arguments ?? {});
+   const content = Array.isArray(result.content) ? [...result.content] : [];
+   if (result.structuredContent && Object.keys(result.structuredContent).length > 0) {
+     content.push({type:'text',text:`Structured result:\n${JSON.stringify(result.structuredContent,null,2)}`});
+@@ -27,5 +35,5 @@
+ });
+ const transport = new StdioServerTransport();
+ await server.connect(transport);
+-const shutdown = async () => { try { await upstream.close(); } finally { process.exit(0); } };
++const shutdown = async () => { broker.close(); try { await upstream.close(); } finally { process.exit(0); } };
+ process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);

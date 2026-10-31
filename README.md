@@ -14,6 +14,9 @@ This is [Hallicopter/agents](https://github.com/Hallicopter/agents), a maintaine
 
 ### Changes from upstream
 
+- **Scoville desktop window:** native movable/resizable Electron viewer and authenticated WebUI pop-out; simple View only/Control UI, with Control unavailable unless the server explicitly enables it. The optional brokered input implementation and proposed production cutover are documented in [desktop-viewer-fork.md](docs/desktop-viewer-fork.md).
+- **Bounded workspace watching:** watches configuration directories without recursively following session artifacts, dependency trees, or browser socket links. Watch errors are handled instead of crashing the server.
+
 - **Safe session replacement:** synchronous and queued saves use unique temporary files and rename directly over the prior record, without deleting it first. Session listing never removes temporary files. Timer-triggered saves use the same serialization as explicit flushes, and shutdown flushing waits for active saves. Failed replacements preserve the old record and temporary data for recovery.
 
 - **Terra compatibility:** adds `gpt-6.1-terra` to the Pi Codex catalog when absent, preserving existing models and OAuth. Explicit Terra requests fail instead of silently falling back to another model; runtime model/provider checks and mini-query response attribution checks enforce the selection. Existing SDK definitions take precedence over the temporary bridge.

@@ -169,10 +169,10 @@ export class WsRpcServer implements RpcServer {
     this.httpHandler = opts?.httpHandler
     this.desktopGateway = opts?.desktopGateway
     if (this.desktopGateway && !this.requireAuth) throw new Error('Desktop gateway requires authenticated RPC')
-    this.handle('desktop:grant', (ctx, sessionId: string, origin: string) => {
+    this.handle('desktop:grant', (ctx, sessionId: string, origin: string, mode?: 'watch' | 'control') => {
       if (!this.desktopGateway) throw new Error('Desktop unavailable')
       return this.desktopGateway.issueRpcGrant(ctx, sessionId, origin, () =>
-        this.clients.get(ctx.clientId)?.workspaceId === ctx.workspaceId)
+        this.clients.get(ctx.clientId)?.workspaceId === ctx.workspaceId, mode)
     })
   }
 

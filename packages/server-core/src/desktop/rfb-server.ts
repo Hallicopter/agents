@@ -2,7 +2,9 @@
  * Drops ServerCutText (including clipboard contents), rejects extensions, bounds memory.
  * Must start immediately AFTER ServerInit. Framebuffers are 32-bit true colour.
  */
-export class WatchServerGate {
+export class RfbServerGate {
+  protected constructor(private readonly allowFence: boolean) {}
+  protected handleFence(_message: Buffer): void { throw new Error('Unsupported server message') }
   private pending = Buffer.alloc(0)
   private failed = false
   push(chunk: Buffer): Buffer[] {
@@ -36,11 +38,22 @@ export class WatchServerGate {
           if (length > 65536) throw new Error('Clipboard limit')
           size = 8 + length
           if (b.length < size) break
+        } else if (b[0] === 248 && this.allowFence) {
+          if (b.length < 9) break
+          if (b[8]! > 64) throw new Error('Fence payload limit')
+          size = 9 + b[8]!
+          if (b.length < size) break
+          this.handleFence(Buffer.from(b.subarray(0, size)))
         } else throw new Error('Unsupported server message')
-        if (b[0] !== 3) output.push(Buffer.from(b.subarray(0, size)))
+        if (b[0] !== 3 && b[0] !== 248) output.push(Buffer.from(b.subarray(0, size)))
         this.pending = b.subarray(size)
       }
       return output
     } catch (error) { this.failed = true; this.pending = Buffer.alloc(0); throw error }
   }
+}
+
+/** Default watch dialect never negotiates or accepts Fence/extensions. */
+export class WatchServerGate extends RfbServerGate {
+  constructor() { super(false) }
 }

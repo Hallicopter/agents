@@ -493,6 +493,20 @@ app.whenReady().then(async () => {
       e.returnValue = windowManager?.getWorkspaceForWindow(e.sender.id) ?? ''
     })
 
+    // Window-local operations must stay local even when the workspace RPC is remote.
+    ipcMain.handle('__desktop:open-window', (event, sessionId: unknown) => {
+      const workspaceId = windowManager?.getWorkspaceForWindow(event.sender.id)
+      if (!workspaceId || event.senderFrame !== event.sender.mainFrame ||
+          typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 256) {
+        throw new Error('Select a session to open Desktop')
+      }
+      windowManager!.openDesktopWindow(workspaceId, sessionId)
+    })
+    ipcMain.on('__desktop:input-active', (event, active: unknown) => {
+      if (event.senderFrame !== event.sender.mainFrame || typeof active !== 'boolean') return
+      windowManager?.setDesktopInputActive(event.sender.id, active)
+    })
+
     // Transport diagnostics bridge — preload reports remote WS connection state changes
     // so failures are visible in terminal/main.log (not only renderer console).
     ipcMain.on('__transport:status', (_event, payload: unknown) => {

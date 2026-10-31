@@ -9,9 +9,20 @@ import { DESECBCipher } from '@novnc/novnc/lib/crypto/des.js'
 import type { RequestContext } from '../transport/types'
 import { WatchServerGate } from './rfb-server'
 import { WatchRfbGate } from './rfb-watch'
+import type { InputArbiter } from './input-arbiter'
 
 export const DESKTOP_PATH = '/api/desktop/view'
 export interface DesktopScope { workspaceId: string; sessionId: string }
+export type DesktopMode = 'watch' | 'control'
+/** Trusted host adapters only; never populated from renderer/request data.
+ * Enabling this requires independently reviewed broker coverage and host cleanup. */
+export interface DesktopControlOptions {
+  arbiter: InputArbiter
+  authorizeRpc: (context: RequestContext, scope: DesktopScope) => Promise<boolean>
+  entitlementExpiresAt: (scope: DesktopScope) => number
+  /** Mandatory host input-drain proof, AFTER the same-connection RFB Fence ACK. */
+  confirmInputDrained: (scope: DesktopScope) => Promise<void>
+}
 export interface DesktopGatewayOptions {
   /** Exact browser origin, HTTPS only. Never inferred from proxy headers. */
   origin: string
@@ -29,8 +40,13 @@ export interface DesktopGatewayOptions {
   /** Exact dev renderer origin. HTTP is restricted to literal loopback/localhost. */
   rpcOrigin?: string
   authorizeRpc?: (context: RequestContext, scope: DesktopScope) => Promise<boolean>
+  /** Absent means control is unavailable; there are no permissive defaults. */
+  control?: DesktopControlOptions
 }
-interface Grant { scope: DesktopScope; validate: () => Promise<boolean>; origin: string; expires: number }
+interface Grant {
+  scope: DesktopScope; validate: () => Promise<boolean>; origin: string; expires: number; mode: DesktopMode
+  control?: { connectionId: string; connected: () => boolean }
+}
 const unavailable = () => Response.json({ error: 'Desktop unavailable' }, { status: 503, headers: { 'Cache-Control': 'no-store' } })
 export { unavailable as desktopUnavailable }
 
@@ -43,6 +59,8 @@ export class DesktopGateway {
   private readonly viewers = new Map<WebSocket, DesktopScope | null>()
   private disposed = false
   constructor(private readonly options: DesktopGatewayOptions) {
+    if (options.control && (!options.control.arbiter ||
+        !['authorizeRpc', 'entitlementExpiresAt', 'confirmInputDrained'].every(key => typeof (options.control as unknown as Record<string, unknown>)[key] === 'function'))) throw new Error('Trusted control adapters required')
     const origin = new URL(options.origin)
     if (origin.protocol !== 'https:' || origin.origin !== options.origin) throw new Error('Exact HTTPS desktop origin required')
     if (options.rpcOrigin) {
@@ -71,28 +89,43 @@ export class DesktopGateway {
         if (bytes > 1024) { await reader.cancel(); return unavailable() }
         body += new TextDecoder().decode(value)
       }
-      const scope = JSON.parse(body) as DesktopScope
+      const scope = JSON.parse(body) as DesktopScope & { mode?: unknown }
+      // HTTP grants are watch-only, including when trusted control is enabled.
+      if (scope?.mode !== undefined && scope.mode !== 'watch') return unavailable()
       if (!scope || typeof scope.workspaceId !== 'string' || typeof scope.sessionId !== 'string' ||
           !scope.workspaceId || !scope.sessionId || scope.workspaceId.length > 200 || scope.sessionId.length > 200) return unavailable()
       if (!await boundedAuthorization(() => this.options.authorize(req.headers, scope))) return unavailable()
       for (const [key, grant] of this.grants) if (grant.expires <= Date.now()) this.grants.delete(key)
       if (this.grants.size >= 16 || this.disposed) return unavailable()
       const token = randomBytes(32).toString('base64url')
-      this.grants.set(token, { scope: { workspaceId: scope.workspaceId, sessionId: scope.sessionId }, validate: () => boundedAuthorization(() => this.options.authorize(req.headers, scope)), origin: this.options.origin, expires: Date.now() + 30_000 })
+      this.grants.set(token, { scope: { workspaceId: scope.workspaceId, sessionId: scope.sessionId }, validate: () => boundedAuthorization(() => this.options.authorize(req.headers, scope)), origin: this.options.origin, expires: Date.now() + 30_000, mode: 'watch' })
       return Response.json({ token }, { headers: { 'Cache-Control': 'no-store' } })
     } catch { return unavailable() }
   }
-  async issueRpcGrant(context: RequestContext, sessionId: string, origin: string, connected: () => boolean): Promise<{ token: string; url: string }> {
+  async issueRpcGrant(context: RequestContext, sessionId: string, origin: string, connected: () => boolean, mode: DesktopMode = 'watch'): Promise<{ token: string; url: string; mode: DesktopMode; expiresAt: number; controlAvailable: boolean }> {
+    if ((mode !== 'watch' && mode !== 'control') || (mode === 'control' && !this.options.control)) throw new Error('Control unavailable — desktop is busy or control is not enabled.')
     if (!context.workspaceId || typeof origin !== 'string' || typeof sessionId !== 'string' || !sessionId || sessionId.length > 200 ||
         (origin !== this.options.origin && origin !== this.options.rpcOrigin && (!this.options.electronOrigin || origin !== this.options.electronOrigin))) throw new Error('Desktop unavailable')
-    const scope = { workspaceId: context.workspaceId, sessionId }
-    const validate = async () => connected() && !!await boundedAuthorization(async () => !!await this.options.authorizeRpc?.(context, scope))
+    const scope = Object.freeze({ workspaceId: context.workspaceId, sessionId })
+    const validate = async () => connected() && !!await boundedAuthorization(async () =>
+      !!await this.options.authorizeRpc?.(context, scope) &&
+      (mode === 'watch' || !!await this.options.control!.authorizeRpc(context, scope))) && connected()
     if (!await validate() || this.disposed) throw new Error('Desktop unavailable')
     for (const [key, grant] of this.grants) if (grant.expires <= Date.now()) this.grants.delete(key)
     if (this.grants.size >= 16) throw new Error('Desktop unavailable')
+    let controlAvailable = mode === 'control'
+    if (mode === 'watch' && this.options.control) {
+      // Capability is a bounded scope authorization hint, NOT a lease/busy promise.
+      try { controlAvailable = !!await boundedAuthorization(() => this.options.control!.authorizeRpc(context, scope)) }
+      catch { controlAvailable = false }
+      if (!connected() || this.disposed) throw new Error('Desktop unavailable')
+    }
     const token = randomBytes(32).toString('base64url')
-    this.grants.set(token, { scope, origin, validate, expires: Date.now() + 30_000 })
-    return { token, url: `${this.options.origin.replace('https:', 'wss:')}${DESKTOP_PATH}` }
+    const expiresAt = mode === 'control' ? Math.min(this.options.control!.entitlementExpiresAt(scope), Date.now() + 5 * 60_000) : Date.now() + 5 * 60_000
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error('Desktop unavailable')
+    this.grants.set(token, { scope, origin, validate, expires: Date.now() + 30_000, mode,
+      ...(mode === 'control' ? { control: { connectionId: randomBytes(32).toString('hex'), connected } } : {}) })
+    return { token, url: `${this.options.origin.replace('https:', 'wss:')}${DESKTOP_PATH}`, mode, expiresAt, controlAvailable }
   }
   /** Call only from the existing ingress's upgrade dispatcher; never open a port. */
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -117,7 +150,13 @@ export class DesktopGateway {
           this.viewers.set(ws, grant.scope)
           if (!await grant.validate() || grant.expires <= Date.now() || ws.readyState !== 1 || this.disposed) throw new Error()
           clearTimeout(deadline)
-          this.stream(ws, grant)
+          if (grant.mode === 'control') {
+            // No control runtime dependency is loaded by a watch-only deployment.
+            const { controlStream } = await import('./control-stream')
+            if (ws.readyState !== 1 || this.disposed || !await grant.validate()) throw new Error()
+            if (ws.readyState !== 1 || this.disposed) throw new Error()
+            controlStream(ws, { ...grant, control: grant.control! }, this.options.upstream, this.options.control!)
+          } else this.stream(ws, grant)
         } catch { ws.close(1008, 'Desktop unavailable') }
       })
     })
@@ -207,7 +246,7 @@ export class DesktopGateway {
       if ((await reader.read(4)).readUInt32BE(0) !== 0 || ws.readyState !== 1) throw new Error()
       ready = true
       // Acknowledge first: renderer attaches noVNC before requesting RFB greeting.
-      ws.send(JSON.stringify({ ready: true }))
+      ws.send(JSON.stringify({ ready: true, mode: 'watch' }))
       send(Buffer.from('RFB 003.008\n'))
     })().catch(close)
   }

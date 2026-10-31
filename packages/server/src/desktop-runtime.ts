@@ -1,3 +1,4 @@
+import { createDesktopControlRuntime, type DesktopControlDeployment } from './desktop-control-runtime'
 import { constants, openSync, closeSync, fstatSync, readFileSync, writeSync, fsyncSync, watch, type FSWatcher } from 'node:fs'
 import { dirname, basename, join } from 'node:path'
 import { DesktopGateway, type DesktopScope } from '@craft-agent/server-core/desktop'
@@ -7,7 +8,8 @@ export interface DesktopDeployment {
   origin: string
   rpcOrigin?: string
   upstream: { host: string; port: number; passwordFile: string }
-  entitlements: Array<DesktopScope & { expiresAt: string }>
+  control?: DesktopControlDeployment
+  entitlements: Array<DesktopScope & { expiresAt: string; control?: boolean }>
 }
 
 /** Open once, refuse links, and verify the same inode we read/write. */
@@ -89,7 +91,11 @@ export function createDesktopRuntime(path: string | undefined) {
     if (JSON.stringify({ ...current, entitlements: [] }) !== JSON.stringify({ ...initial, entitlements: [] })) return false
     return current.entitlements.some(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && Date.parse(e.expiresAt) > Date.now())
   }
+  const controlRuntime = initial.control ? createDesktopControlRuntime(initial.control,
+    scope => permitted(scope) && load().entitlements.some(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && e.control === true && Date.parse(e.expiresAt) > Date.now()),
+    scope => Math.max(0, ...load().entitlements.filter(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && e.control === true).map(e => Date.parse(e.expiresAt)))) : undefined
   const gateway = new DesktopGateway({
+    control: controlRuntime?.control,
     origin: initial.origin,
     rpcOrigin: initial.rpcOrigin,
     upstream: {
@@ -122,8 +128,10 @@ export function createDesktopRuntime(path: string | undefined) {
       for (const scope of seen.values()) gateway.revoke(scope)
     }
   })
+  watcher.on('error', () => { disabled = true; gateway.dispose() })
   watcher.unref()
   return {
+    ready: controlRuntime?.ready ?? Promise.resolve(),
     gateway,
     bind(sm: SessionManager) {
       manager = sm
@@ -132,6 +140,6 @@ export function createDesktopRuntime(path: string | undefined) {
       sm.cancelProcessing = async (...args) => { revokeSession(args[0]); return cancel(...args) }
       sm.deleteSession = async (...args) => { revokeSession(args[0]); return remove(...args) }
     },
-    dispose() { watcher?.close(); watcher = undefined; gateway.dispose() },
+    async dispose() { watcher?.close(); watcher = undefined; gateway.dispose(); await controlRuntime?.dispose() },
   }
 }

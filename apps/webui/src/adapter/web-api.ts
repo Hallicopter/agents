@@ -74,6 +74,7 @@ export function createWebApi(options: WebApiOptions): {
   client: WsRpcClient
 } {
   const { serverUrl, workspaceId } = options
+  let currentWorkspaceId = workspaceId
 
   const client = new WsRpcClient(serverUrl, {
     workspaceId,
@@ -128,6 +129,20 @@ export function createWebApi(options: WebApiOptions): {
       return () => darkMediaQuery.removeEventListener('change', handler)
     },
 
+    openDesktopWindow: async (sessionId: string) => {
+      const url = new URL(window.location.href)
+      url.search = new URLSearchParams({
+        ...(currentWorkspaceId ? { workspace: currentWorkspaceId } : {}),
+        desktopWindow: 'true', desktopSessionId: sessionId,
+      }).toString()
+      url.hash = ''
+      const popup = window.open(url.toString(), `scoville-desktop-${currentWorkspaceId}-${sessionId}`, 'popup,width=1100,height=760,resizable=yes,scrollbars=no')
+      if (!popup) throw new Error('Allow pop-ups for this site to open Desktop')
+      popup.opener = null
+      popup.focus()
+    },
+    setDesktopInputActive: () => {}, // no application menu accelerators in browsers
+
     // Window management — no-ops or browser equivalents
     setTrafficLightsVisible: () => Promise.resolve(),
     closeWindow: () => Promise.resolve(),
@@ -147,12 +162,13 @@ export function createWebApi(options: WebApiOptions): {
     },
 
     // Workspace operations — web UI works with a single connection
-    getWindowWorkspace: () => Promise.resolve(workspaceId ?? null),
+    getWindowWorkspace: () => Promise.resolve(currentWorkspaceId ?? null),
     getWindowMode: () => Promise.resolve('main'),
     // switchWorkspace must call the server so it registers the client's
     // workspaceId — otherwise push events (session updates) won't arrive.
     switchWorkspace: async (wsId: string) => {
       await client.invoke('window:switchWorkspace', wsId)
+      currentWorkspaceId = wsId
     },
     openWorkspace: async () => {},
     openSessionInNewWindow: async (_wsId: string, sessionId: string) => {

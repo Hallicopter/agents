@@ -243,7 +243,10 @@ export type WindowVibrancy = 'under-window' | 'mica'
 
 export interface ElectronAPI {
   /** Scoped single-use viewer grant, never an upstream/admin credential. */
-  getDesktopViewerGrant(sessionId: string, origin: string): Promise<{ token: string; url: string }>
+  getDesktopViewerGrant(sessionId: string, origin: string, mode?: 'watch' | 'control'): Promise<{ token: string; url: string; mode?: 'watch' | 'control'; expiresAt?: number }>
+  /** Opens/focuses a viewer of this session's existing desktop, not a new desktop. */
+  openDesktopWindow(sessionId: string): Promise<void>
+  setDesktopInputActive(active: boolean): void
   // Session management
   getSessions(): Promise<Session[]>
   getUnreadSummary(): Promise<UnreadSummary>

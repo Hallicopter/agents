@@ -81,7 +81,11 @@ describe('gateway authorization', () => {
       await expect(gateway.issueRpcGrant(ctx, scope.sessionId, undefined as unknown as string, () => true)).rejects.toThrow()
       await expect(gateway.issueRpcGrant(ctx, scope.sessionId, 'null', () => false)).rejects.toThrow()
       await expect(gateway.issueRpcGrant(ctx, 'foreign', 'null', () => true)).rejects.toThrow()
-      expect((await gateway.issueRpcGrant(ctx, scope.sessionId, 'null', () => true)).url).toBe('wss://desktop.example.test/api/desktop/view')
+      const watch = await gateway.issueRpcGrant(ctx, scope.sessionId, 'null', () => true)
+      expect(watch.url).toBe('wss://desktop.example.test/api/desktop/view')
+      expect(watch.mode).toBe('watch')
+      await expect(gateway.issueRpcGrant(ctx, scope.sessionId, 'null', () => true, 'control')).rejects.toThrow('Control unavailable')
+      await expect(gateway.issueRpcGrant(ctx, scope.sessionId, 'null', () => true, 'unexpected' as 'watch')).rejects.toThrow('Control unavailable')
     } finally { gateway.dispose() }
   })
 })
@@ -130,7 +134,7 @@ test('end-to-end VNC auth, shared init, framebuffer, replay denial and server in
     ws.on('message', data => { messages.push(Buffer.from(data as Buffer)); waiters.shift()?.() })
     const next = async () => { if (!messages.length) await new Promise<void>(resolve => waiters.push(resolve)); return messages.shift()! }
     await once(ws, 'open'); ws.send(JSON.stringify({ token }))
-    expect(JSON.parse((await next()).toString())).toEqual({ ready: true })
+    expect(JSON.parse((await next()).toString())).toEqual({ ready: true, mode: 'watch' })
     expect(await next()).toEqual(version)
     ws.send(version); expect(await next()).toEqual(Buffer.from([1, 1]))
     ws.send(Buffer.from([1])); expect(await next()).toEqual(Buffer.alloc(4))

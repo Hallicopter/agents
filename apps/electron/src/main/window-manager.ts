@@ -43,11 +43,14 @@ function getWindowsBackgroundMaterial(): 'mica' | undefined {
 interface ManagedWindow {
   window: BrowserWindow
   workspaceId: string
+  desktopSessionId?: string
 }
 
 export interface CreateWindowOptions {
   /** The workspace to open (empty string for onboarding) */
   workspaceId: string
+  /** Dedicated viewer of an existing desktop; never persisted/restored. */
+  desktopSessionId?: string
   /** Whether to open in focused mode (smaller window, no sidebars) */
   focused?: boolean
   /** Deep link URL to navigate to after window loads (without ?window= param) */
@@ -178,6 +181,10 @@ export class WindowManager {
     const showWorkspaceName = this.windows.size > 1
     for (const { window, workspaceId } of this.windows.values()) {
       if (window.isDestroyed()) continue
+      if (this.windows.get(window.webContents.id)?.desktopSessionId) {
+        window.setTitle(`Desktop — ${defaultTitle}`)
+        continue
+      }
       let title = defaultTitle
       if (showWorkspaceName && workspaceId) {
         try {
@@ -196,7 +203,7 @@ export class WindowManager {
    * @param options - Window creation options
    */
   createWindow(options: CreateWindowOptions): BrowserWindow {
-    const { workspaceId, focused = false, initialDeepLink, restoreUrl } = options
+    const { workspaceId, focused = false, initialDeepLink, restoreUrl, desktopSessionId } = options
 
     // Load platform-specific app icon
     // In packaged app, resources are at dist/resources/ (same level as __dirname)
@@ -219,25 +226,25 @@ export class WindowManager {
     }
 
     // Use smaller window size for focused mode (single session view)
-    const windowWidth = focused ? 900 : 1400
-    const windowHeight = focused ? 700 : 900
+    const windowWidth = desktopSessionId ? 1100 : focused ? 900 : 1400
+    const windowHeight = desktopSessionId ? 760 : focused ? 700 : 900
 
     // Platform-specific window options
     const isMac = process.platform === 'darwin'
     const isWindows = process.platform === 'win32'
     const windowsBackgroundMaterial = getWindowsBackgroundMaterial()
-    const windowVibrancy = isMac ? 'under-window' : windowsBackgroundMaterial
+    const windowVibrancy = isMac ? (desktopSessionId ? undefined : 'under-window') : windowsBackgroundMaterial
 
     const window = new BrowserWindow({
       width: windowWidth,
       height: windowHeight,
-      minWidth: 800,
-      minHeight: 600,
+      minWidth: desktopSessionId ? 560 : 800,
+      minHeight: desktopSessionId ? 360 : 600,
       show: false, // Don't show until ready-to-show event (faster perceived startup)
       title: '',
       icon: iconExists ? iconPath : undefined,
       // macOS-specific: hidden title bar with inset traffic lights
-      ...(isMac && {
+      ...(isMac && !desktopSessionId && {
         titleBarStyle: 'hiddenInset',
         trafficLightPosition: { x: 18, y: 16 },
         vibrancy: 'under-window',
@@ -297,6 +304,7 @@ export class WindowManager {
 
     // Right-click menu in every build: spelling, Copy Link, edit actions (+ Inspect in dev)
     window.webContents.on('context-menu', (_event, params) => {
+      if (desktopSessionId) return // no local edit/clipboard menu over the remote canvas
       const template = buildContextMenuTemplate(params, {
         t: key => i18n.t(key),
         replaceMisspelling: suggestion => window.webContents.replaceMisspelling(suggestion),
@@ -318,7 +326,7 @@ export class WindowManager {
     // Store the window mapping BEFORE loadURL — bootstrap preload uses
     // __get-workspace-id (via sendSync) which reads this map during eval.
     const webContentsId = window.webContents.id
-    this.windows.set(webContentsId, { window, workspaceId })
+    this.windows.set(webContentsId, { window, workspaceId, desktopSessionId })
 
     // Apply window-title policy now that the map size reflects this window —
     // covers both the new window and any existing windows that should switch
@@ -328,6 +336,12 @@ export class WindowManager {
     // Track focused mode state for persistence
     if (focused) {
       this.focusedModeWindows.add(webContentsId)
+    }
+
+    const defaultQuery: Record<string, string> = { workspaceId }
+    if (desktopSessionId) {
+      defaultQuery.desktopWindow = 'true'
+      defaultQuery.desktopSessionId = desktopSessionId
     }
 
     // Load the renderer - use restoreUrl if provided, otherwise build from options
@@ -358,12 +372,12 @@ export class WindowManager {
           savedUrl.searchParams.forEach((value, key) => { query[key] = value })
           window.loadFile(join(__dirname, 'renderer/index.html'), { query })
         } catch {
-          window.loadFile(join(__dirname, 'renderer/index.html'), { query: { workspaceId } })
+          window.loadFile(join(__dirname, 'renderer/index.html'), { query: defaultQuery })
         }
       }
     } else {
       // Build URL from options
-      const query: Record<string, string> = { workspaceId }
+      const query: Record<string, string> = { ...defaultQuery }
       if (focused) {
         query.focused = 'true' // Open in focused mode (no sidebars)
       }
@@ -387,11 +401,11 @@ export class WindowManager {
         failLoadRetries++
         windowLog.info(`Retrying Vite dev server (attempt ${failLoadRetries}/5)...`)
         setTimeout(() => {
-          const params = new URLSearchParams({ workspaceId }).toString()
+          const params = new URLSearchParams(defaultQuery).toString()
           window.loadURL(`${VITE_DEV_SERVER_URL}?${params}`)
         }, 1000)
       } else {
-        window.loadFile(join(__dirname, 'renderer/index.html'), { query: { workspaceId } })
+        window.loadFile(join(__dirname, 'renderer/index.html'), { query: defaultQuery })
       }
     })
 
@@ -426,6 +440,7 @@ export class WindowManager {
       this.pushToWindow(window, RPC_CHANNELS.window.FOCUS_STATE, true)
     })
     window.on('blur', () => {
+      if (desktopSessionId) window.webContents.setIgnoreMenuShortcuts(false)
       this.pushToWindow(window, RPC_CHANNELS.window.FOCUS_STATE, false)
     })
 
@@ -458,7 +473,7 @@ export class WindowManager {
     window.on('close', (event) => {
       // During app quit, bypass layered close behavior and allow native close flow.
       // This preserves expected Cmd+Q semantics (quit app instead of closing overlays/panels first).
-      if (this.isAppQuitting) {
+      if (this.isAppQuitting || desktopSessionId) {
         return
       }
 
@@ -523,6 +538,26 @@ export class WindowManager {
     return window
   }
 
+  /** One independent native viewer per workspace/session, using the trusted app preload. */
+  openDesktopWindow(workspaceId: string, sessionId: string): BrowserWindow {
+    for (const managed of this.windows.values()) {
+      if (managed.workspaceId === workspaceId && managed.desktopSessionId === sessionId && !managed.window.isDestroyed()) {
+        if (managed.window.isMinimized()) managed.window.restore()
+        managed.window.show()
+        managed.window.focus()
+        return managed.window
+      }
+    }
+    return this.createWindow({ workspaceId, desktopSessionId: sessionId })
+  }
+
+  /** Disable local menu accelerators only while the confirmed-control canvas has focus. */
+  setDesktopInputActive(webContentsId: number, active: boolean): void {
+    const managed = this.windows.get(webContentsId)
+    if (!managed?.desktopSessionId || managed.window.isDestroyed()) return
+    managed.window.webContents.setIgnoreMenuShortcuts(active && managed.window.isFocused())
+  }
+
   /**
    * Get window by webContents.id (used by IPC handlers instead of BrowserWindow.fromId)
    */
@@ -536,7 +571,7 @@ export class WindowManager {
    */
   getWindowByWorkspace(workspaceId: string): BrowserWindow | null {
     for (const managed of this.windows.values()) {
-      if (managed.workspaceId === workspaceId && !managed.window.isDestroyed()) {
+      if (!managed.desktopSessionId && managed.workspaceId === workspaceId && !managed.window.isDestroyed()) {
         return managed.window
       }
     }
@@ -693,7 +728,7 @@ export class WindowManager {
    * Used by window-state.ts to save/restore windows
    */
   getWindowStates(): SavedWindow[] {
-    return this.getAllWindows().map(managed => {
+    return this.getAllWindows().filter(managed => !managed.desktopSessionId).map(managed => {
       const webContentsId = managed.window.webContents.id
       const isFocused = this.focusedModeWindows.has(webContentsId)
       const url = managed.window.webContents.getURL()

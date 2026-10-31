@@ -203,6 +203,8 @@ client.handleCapability(CLIENT_BROWSER_INVOKE, async (req: BrowserCapabilityRequ
 const api = buildClientApi(client, CHANNEL_MAP, (ch) => client.isChannelAvailable(ch))
 
 ;(api as any).getRuntimeEnvironment = (): 'electron' | 'web' => 'electron'
+api.openDesktopWindow = (sessionId) => ipcRenderer.invoke('__desktop:open-window', sessionId)
+api.setDesktopInputActive = (active) => ipcRenderer.send('__desktop:input-active', active)
 
 // ---------------------------------------------------------------------------
 // Transport connection state logging (for remote connections)
