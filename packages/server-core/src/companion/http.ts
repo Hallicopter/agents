@@ -1,6 +1,6 @@
 import type { CompanionStore } from './store'
 
-export interface SessionView { id: string; workspaceId: string; name?: string; isProcessing: boolean; lastMessageAt: number; parentSessionId?: string; hidden?: boolean; permissionMode?: string; sessionStatus?: string; messages?: Array<{ id: string; role: string; content: string; timestamp: number; hidden?: boolean }> }
+export interface SessionView { id: string; workspaceId: string; name?: string; labels?: string[]; isProcessing: boolean; lastMessageAt: number; parentSessionId?: string; hidden?: boolean; permissionMode?: string; sessionStatus?: string; messages?: Array<{ id: string; role: string; content: string; timestamp: number; hidden?: boolean }> }
 export interface CompanionBackend {
   sessions(workspaceId: string): SessionView[]
   session(id: string): Promise<SessionView | null>
@@ -15,7 +15,7 @@ export function redact(text: string) {
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, '$1[REDACTED]')
     .replace(/((?:api[_-]?key|password|secret|access[_-]?token|refresh[_-]?token)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]')
 }
-const summary = (s: SessionView) => ({ id: s.id, name: redact(s.name ?? 'Untitled'), isProcessing: s.isProcessing, lastMessageAt: s.lastMessageAt, permissionMode: s.permissionMode, sessionStatus: s.sessionStatus, ...(s.parentSessionId ? { parentSessionId: s.parentSessionId } : {}) })
+const summary = (s: SessionView) => ({ id: s.id, name: redact(s.name ?? 'Untitled'), labels: ['puck', 'puck-automation', 'puck-subagent'].filter(label => s.labels?.includes(label)), isProcessing: s.isProcessing, lastMessageAt: s.lastMessageAt, permissionMode: s.permissionMode, sessionStatus: s.sessionStatus, ...(s.parentSessionId ? { parentSessionId: s.parentSessionId } : {}) })
 const response = (status: number, body: unknown) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'" } })
 const ok = (data: unknown, status = 200) => response(status, { ok: true, data })
 const fail = (status: number, code: string) => response(status, { ok: false, error: { code, message: code.replaceAll('_', ' ') } })
@@ -57,7 +57,10 @@ export function createCompanionHandler(store: CompanionStore, backend: Companion
         return result
       }
       if (path === '/api/companion/v1/sessions') {
-        if (req.method === 'GET') { const all = list(); return ok({ sessions: all.slice(0, 200).map(scopedSummary), truncated: all.length > 200 }) }
+        if (req.method === 'GET') { const all = list().sort((a, b) => {
+          const primary = (s: SessionView) => s.labels?.includes('puck') && ['261022-fresh-gust', '261022-golden-reed'].includes(s.id) ? 1 : 0
+          return primary(b) - primary(a) || b.lastMessageAt - a.lastMessageAt
+        }); return ok({ sessions: all.slice(0, 200).map(scopedSummary), truncated: all.length > 200 }) }
         if (req.method === 'POST') {
           if (!device.scopes.includes('create')) return fail(403, 'forbidden')
           const b = await body()

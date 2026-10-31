@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.craftagents.companion" android:versionCode="1" android:versionName="0.1.0-debug">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.craftagents.companion" android:versionCode="2" android:versionName="0.2.0-debug">
   <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
   <uses-permission android:name="android.permission.INTERNET" />
   <application android:label="Scoville Agents" android:theme="@style/AppTheme" android:allowBackup="false" android:fullBackupContent="false" android:usesCleartextTraffic="false" android:debuggable="true" android:supportsRtl="true">

@@ -298,3 +298,28 @@ describe('dispatch authorization callback', () => {
     })
   }
 })
+
+describe('mobile navigation metadata', () => {
+  it('projects only exact navigation labels and never broadens device visibility', async () => {
+    const f = fixture()
+    f.sessions[0]!.labels = ['puck', 'puck-subagent', 'private-secret', 'puckish', 'puck::value']
+    f.sessions[1]!.labels = ['puck']
+    const data = (await (await f.call('/sessions')).json() as any).data
+    expect(data.sessions.map((s: any) => s.id)).toEqual(['one'])
+    expect(data.sessions[0].labels).toEqual(['puck', 'puck-subagent'])
+    expect(JSON.stringify(data)).not.toContain('private-secret')
+    expect((await f.call('/sessions/other')).status).toBe(404)
+    expect(((await (await f.call('/sessions/one')).json()) as any).data.session.labels).toEqual(['puck', 'puck-subagent'])
+  })
+  it('promotes only authorized exact-label primary Pucks ahead of the bounded list', async () => {
+    const f = fixture({ allSessions: true })
+    for(let n=0;n<205;n++) f.sessions.push({ id: `recent${n}`, workspaceId: 'ws', isProcessing: false, lastMessageAt: 100+n })
+    f.sessions.push({ id: '261022-fresh-gust', workspaceId: 'ws', name: 'Main', labels: ['puck'], isProcessing: false, lastMessageAt: 0 })
+    f.sessions.push({ id: '261022-golden-reed', workspaceId: 'ws', labels: ['puck'], hidden: true, isProcessing: false, lastMessageAt: 0 })
+    const data = (await (await f.call('/sessions')).json() as any).data
+    expect(data.sessions[0].id).toBe('261022-fresh-gust')
+    expect(data.sessions.some((s: any) => s.id === '261022-golden-reed')).toBe(false)
+    expect(data.sessions.length).toBe(200)
+    expect(data.truncated).toBe(true)
+  })
+})

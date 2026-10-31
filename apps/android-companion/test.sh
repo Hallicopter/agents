@@ -11,9 +11,10 @@ python3 tests/security-invariants.py
 JSON="$TOOLCHAIN/test-libs/json-20240303.jar"
 if [[ -f "$JSON" ]]; then
   echo '3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed  '"$JSON" | sha256sum -c -
-  javac --release 8 -cp "$JSON" -d build/tests src/com/craftagents/companion/Policy.java src/com/craftagents/companion/Api.java src/com/craftagents/companion/GrantSummary.java tests/ApiTest.java tests/GrantSummaryTest.java
+  javac --release 8 -cp "$JSON" -d build/tests src/com/craftagents/companion/Policy.java src/com/craftagents/companion/Api.java src/com/craftagents/companion/GrantSummary.java src/com/craftagents/companion/ChatModel.java src/com/craftagents/companion/TransportError.java tests/ChatModelTest.java tests/ApiTest.java tests/GrantSummaryTest.java
   java -cp "build/tests:$JSON" com.craftagents.companion.ApiTest
   java -cp "build/tests:$JSON" com.craftagents.companion.GrantSummaryTest
+  java -cp "build/tests:$JSON" com.craftagents.companion.ChatModelTest
 else
   echo 'SKIP HTTPS fixture tests: test-only org.json 20240303 JAR not installed.'
 fi

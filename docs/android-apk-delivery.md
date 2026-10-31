@@ -7,9 +7,9 @@ the normal reviewed deployment and ops-owned coordinated restart. Without that
 setting the listener is unchanged. Do not enable Android backend access until
 its independent security review passes; artifact delivery grants no backend access.
 
-The handler reads only a regular non-symlink file, bounded to 33,171 bytes, and
+The handler reads only a regular non-symlink file, bounded to 37,267 bytes, and
 pins SHA-256 to
-`38766fa98e3f3dd138f7dc7f6da255e49fc77f2f3dc770253c0920d92c6b2df0`.
+`b2c5df8299d746d774026d1886d9598dc75ec0bb8ae729ff7a575bb60d3c7d16`.
 It serves validated immutable memory, not a directory or request-selected path.
 A different APK needs a separately reviewed hash/size change. Invalid configured
 artifacts fail startup closed. GET/HEAD only; query strings and other download

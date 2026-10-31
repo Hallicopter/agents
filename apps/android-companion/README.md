@@ -1,14 +1,16 @@
-# Scoville Agents — Android MVP
+# Scoville Agents — Android native chat preview
 
 Native Java, Android 8.0+ (API 26), compile/target API 35. No app runtime dependencies or Gradle. Displayed app brand: **Scoville Agents**. Internal package remains `com.craftagents.companion` for compatibility; no application-ID, credential-store, or protocol migration. The artifact filename remains `craft-companion-debug.apk`. This Android fork builds on Craft Agents; upstream attribution, repository LICENSE/NOTICE and internal identifiers remain unchanged.
 
-**Preview only. The server patch is not deployed. This APK has been compiled and signature-verified, but has not been installed/run on an Android device or emulator. Do not treat this as production-ready or runtime-security-certified.**
+**Debug preview only, not production-certified. The original scoped facade is deployed on the private trusted-TLS endpoint; this redesign requires a separately reviewed server label projection and fixed APK size/hash update. Consult the dated delivery handoff for actual deployment, emulator and phone verification, never infer them from this README.**
 
 ## What is implemented
 
 - Pair against a user-entered HTTPS **origin** using a five-minute, single-use desktop-issued code; no admin-token login.
 - Android Keystore AES-GCM encryption of the revocable device credential plus associated origin/workspace/device/scopes and nonsecret enrollment consent/session-grant metadata. The Pucks screen and Device dialog disclose all-workspace vs initial allowlist count, workspace-wide Pages access and scopes; the Device dialog also shows desktop consent. Older paired records explicitly show that grant details are unavailable. Newly created sessions may expand the grant after this labeled enrollment snapshot. The pairing code is never persisted. Hardware-backed key storage depends on the device.
-- Named sessions/Pucks, status, parent links and subagent lists, recent user/assistant history.
+- Native sidebar separates exact `puck`, `puck-automation`, `puck-subagent` labels and other authorized chats. The two primary Pucks are promoted only when already granted and exactly labeled; missing access is explained, never broadened. Search filters the authorized in-memory chat list.
+- Recycled native ListView bubbles with keyed row/stable-ID retention, rolling-window viewport anchoring, and per-chat memory-only drafts. No whole-history view rebuild on polling. Credential-bound caches and drafts are cleared on re-pair/forget.
+- Truthful activity bar: sending, server-accepted/waiting, Working from `isProcessing`, newer assistant reply received, reconnecting and unconfirmed send. No hidden reasoning or fabricated tool phases; current API provides no tool progress metadata.
 - Message existing sessions according to device scopes, preserving that session's existing permissions. `chat` permits safe-mode chat; non-safe sessions also require `existing-permissions`.
 - Create a named safe/Explore-mode session with `create` scope. New sessions have no enabled sources and no working directory.
 - **Snapshot polling, not token streaming:** current chat every 2 seconds when processing, otherwise lists/chat every 10 seconds. Failed reads back off to 30 seconds. Pausing the Activity stops scheduling reads; an already-started read may finish. No background service.
@@ -53,8 +55,8 @@ Fixture tests use **test-only** org.json `20240303` from Maven Central at `$TOOL
    ```sh
    adb install -r craft-companion-debug.apk
    ```
-   No distribution, upload, install, or ADB daemon was started by this implementation.
-3. **First have the server change separately reviewed and deployed.** The companion facade is off by default. Pairing will not work against an unchanged server.
+   **Upgrade over the existing app. Do not uninstall or clear storage:** that deletes local pairing. Preserve the existing signing key/package/Keystore. Runtime QA uses a separate synthetic emulator, never the user’s pairing.
+3. Have the matching server label projection and fixed APK pin reviewed/deployed by the serialized integration/restart owners. The existing facade remains device-authenticated and disabled by default on new deployments.
 4. The existing backend listener must actually terminate TLS using a certificate Android trusts. Plain HTTP upstream behind a reverse proxy is currently rejected by the server (426), even if the public edge is HTTPS. Do not work around this with a trust-all client or admin WebSocket token.
 5. Use the server worker's desktop/admin instructions to mint a short-lived code with least-privilege session allowlist/scopes. Enter only HTTPS origin, pairing code and device label in the app.
 6. To invalidate access, revoke the device on desktop. **Disconnect in this app only erases local credentials; it does not revoke the server credential.**
@@ -74,17 +76,22 @@ Base path `/api/companion/v1`, Authorization `Bearer <deviceToken>` except enrol
 | GET | `/pages` | `{pages:[{slug,name,description?}],truncated?}` |
 | GET | `/pages/:slug` | `{page:{slug,name,description?},contentText,contentHtml?}` |
 
-Summary fields: `id`, `name`, `isProcessing`, `lastMessageAt`, optional `parentSessionId`, `permissionMode`, `sessionStatus`. Based on the actual scoped facade in `packages/server-core/src/companion/http.ts` and backend adapter in `packages/server/src/companion.ts`; not broad WebUI cookie/WS APIs. The client never grants capabilities beyond returned scopes; server remains authoritative.
+Summary fields: `id`, `name`, `labels` (unique subset of the three navigation labels only), `isProcessing`, `lastMessageAt`, optional `parentSessionId`, `permissionMode`, `sessionStatus`. Based on the actual scoped facade in `packages/server-core/src/companion/http.ts` and backend adapter in `packages/server/src/companion.ts`; not broad WebUI cookie/WS APIs. The client never grants capabilities beyond returned scopes; server remains authoritative.
 
 ## Security boundaries
 
 - HTTPS platform trust/hostname verification, no redirects, no cookies in native API requests, bounded body (2 MiB), connect/read timeouts. No automatic mutation retries.
 - Credential bundle encrypted with authenticated AES-GCM under a non-exportable Android Keystore key. No plaintext token in preferences, URLs, logs or app resources. Backup disabled. Screenshot/recents capture blocked using `FLAG_SECURE`; pairing autofill/state saving disabled.
-- Transcripts remain in Activity memory, not an offline disk cache. Local drafts do not survive process death, rotation or navigation. No crash/analytics SDK.
+- Transcripts remain in Activity memory, not an offline disk cache. Local drafts survive chat navigation within this Activity, not process death/rotation, re-pair or local forget. No crash/analytics SDK.
 - Pages WebView has a synthetic origin unrelated to the authenticated server, receives only authored HTML and **no credentials or JavaScript interface**. JavaScript, DOM/database storage, file/content access, network/image fetches, geolocation, popups, permissions, file picking and downloads disabled. All navigation refused; all non-data subresource requests intercepted. Earliest CSP permits inline styles and data images/fonts only; scripts, connections, frames, forms, objects and workers denied. Later authored CSP cannot relax the existing policy. Text fallback is always available.
 - Static rendering is not a guarantee against every Android WebView engine vulnerability or resource-exhaustion document. Real-device hostile-content testing remains required. Keep Android System WebView updated.
 - `existing-permissions` allows the **agent** to use its pre-existing tool permissions. It is not a mobile read-only guarantee. The app cannot answer approval/credential requests; resolve them on desktop.
 
 ## Remaining limitations / required runtime QA
 
-No real-device/emulator/UI/TLS/Keystore lifecycle/end-to-end server testing was available. Inspect `tests/MANUAL-QA.md` before distributing internally. No attachments, tool output, approvals, push notifications, background jobs, Markdown rich renderer, local search, history pagination or live page data. Server returns bounded snapshots; older/truncated content remains desktop-only. API failures may appear as stable status/code instead of detailed server prose to avoid reflecting sensitive error content.
+Physical-phone TLS/UI verification is separate from software-emulator fixture QA; consult the dated handoff for executed checks and screenshots. Inspect `tests/MANUAL-QA.md` before distributing internally. No attachments, tool output, approvals, push notifications, background jobs, Markdown rich renderer, full-history search, history pagination or live page data. Server returns bounded snapshots; older/truncated content remains desktop-only. API failures may appear as stable status/code instead of detailed server prose to avoid reflecting sensitive error content.
+
+
+## Transport diagnosis
+
+The older client mapped every SSLException to “TLS verification failed”; a record interruption or network failure can raise SSLException without proving certificate failure. The native client now distinguishes certificate/path/peer verification evidence, handshake-unknown, generic secure interruption, DNS, timeout and unreachable categories. Default platform trust/hostname verification is unchanged. A valid Linux host chain does not prove the affected phone trust store/network/date is correct. Unconfirmed mutations are never replayed for diagnosis; check history before any deliberate resend.

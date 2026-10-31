@@ -9,6 +9,13 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
+import android.text.TextWatcher;
+import android.text.Editable;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import android.text.InputFilter;
 import android.view.View;
 import android.view.WindowManager;
@@ -32,7 +39,15 @@ public final class MainActivity extends Activity {
     private TextView connection, detailMeta;
     private EditText composer;
     private Button send;
-    private ScrollView history;
+    private ListView history;
+    private final ChatModel chatModel = new ChatModel();
+    private ChatAdapter chatAdapter;
+    private TextView activity, historyNotice;
+    private JSONArray sessionSnapshot = new JSONArray();
+    private String listKey = "", search = "", category = "Pucks", lastActivity = "";
+    private boolean wasProcessing, awaitingReply;
+    private String acceptedAssistantKey = "";
+    private final HashMap<String,String> drafts = new HashMap<>();
     private StaticPageView pageView;
     private String screen = "sessions", selected = "", transcriptKey = "";
     private int generation = 0, failures = 0;
@@ -63,6 +78,7 @@ public final class MainActivity extends Activity {
     private TextView text(String value, int size, int color) {
         TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color); t.setPadding(0, dp(6), 0, dp(6)); return t;
     }
+    private void updateText(TextView view, String value) { if(!android.text.TextUtils.equals(view.getText(),value))view.setText(value); }
     private Button button(String label, Runnable action) {
         Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextColor(GREEN); b.setMinHeight(dp(48)); b.setOnClickListener(v -> action.run()); return b;
     }
@@ -74,13 +90,15 @@ public final class MainActivity extends Activity {
     }
     private void base(String title, String subtitle) {
         main.removeCallbacks(poll); disposePage(); generation++; reading = false;
-        root = column(); root.setBackgroundColor(Color.rgb(245, 244, 239)); root.setPadding(dp(18), dp(12), dp(18), dp(8));
+        root = column(); root.setBackgroundColor(Color.rgb(244, 247, 246)); root.setPadding(dp(18), dp(12), dp(18), dp(8));
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             root.setPadding(dp(18) + insets.getSystemWindowInsetLeft(), dp(12) + insets.getSystemWindowInsetTop(),
                 dp(18) + insets.getSystemWindowInsetRight(), dp(8) + insets.getSystemWindowInsetBottom());
             return insets.consumeSystemWindowInsets();
         });
-        TextView brand = text(title, 27, INK); brand.setTypeface(null, Typeface.BOLD); root.addView(brand);
+        LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
+        if(api != null) heading.addView(button("☰", this::showDrawer), new LinearLayout.LayoutParams(dp(52),dp(48)));
+        TextView brand = text(title, 23, INK); brand.setTypeface(null, Typeface.BOLD); heading.addView(brand,new LinearLayout.LayoutParams(0,-2,1)); root.addView(heading);
         connection = text(subtitle, 12, MUTED); connection.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); root.addView(connection);
         setContentView(root);
     }
@@ -122,7 +140,7 @@ public final class MainActivity extends Activity {
                     if (result.has("consent")) saved.put("consent", result.getString("consent"));
                     store.save(saved);
                     main.post(() -> { mutating = false; if (epoch != generation || isDestroyed()) return;
-                        device = saved; api = new Api(address, saved.optString("deviceToken")); shell("sessions", ""); });
+                        clearCredentialViews(); device = saved; api = new Api(address, saved.optString("deviceToken")); shell("sessions", ""); });
                 } catch (Exception e) { main.post(() -> { mutating = false; if (epoch != generation || isDestroyed()) return;
                     pair.setEnabled(true); connection.setText("Pairing failed. " + safeError(e) + " If the code was consumed, create a new one on desktop."); }); }
             });
@@ -131,21 +149,29 @@ public final class MainActivity extends Activity {
     }
     private void shell(String next, String id) {
         if (mutating) { connection.setText("Wait for the pending request before navigating."); return; }
-        screen = next; selected = id; transcriptKey = ""; failures = 0; permissionMode = ""; send = null;
+        if (composer != null && screen.equals("chat")) drafts.put(selected, composer.getText().toString());
+        screen = next; selected = id; transcriptKey = ""; listKey = ""; failures = 0; permissionMode = ""; send = null; composer = null;
+        awaitingReply = false; wasProcessing = false; lastActivity = ""; acceptedAssistantKey = ""; activity = null; chatModel.rows.clear();
         base("Scoville Agents", "Connecting…");
-        LinearLayout tabs = new LinearLayout(this);
-        tabs.addView(button("Pucks", () -> shell("sessions", "")), new LinearLayout.LayoutParams(0, dp(50), 1));
-        tabs.addView(button("Pages", () -> shell("pages", "")), new LinearLayout.LayoutParams(0, dp(50), 1));
-        tabs.addView(button("Device", this::deviceDialog), new LinearLayout.LayoutParams(0, dp(50), 1)); root.addView(tabs);
         if (next.equals("chat")) {
             detailMeta = text("Loading session…", 14, MUTED); root.addView(detailMeta);
-            root.addView(button("Parent / subagents", () -> shell("children", selected)));
-            history = new ScrollView(this); messages = column(); history.addView(messages); root.addView(history, new LinearLayout.LayoutParams(-1, 0, 1));
+            LinearLayout actions = new LinearLayout(this); actions.addView(button("‹ Chats", () -> shell("sessions", "")), new LinearLayout.LayoutParams(0,dp(44),1));
+            actions.addView(button("Subagents", () -> shell("children", selected)), new LinearLayout.LayoutParams(0,dp(44),1)); root.addView(actions);
+            activity = text("Connecting…", 13, GREEN); activity.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); root.addView(activity);
+            historyNotice = text("",12,MUTED); root.addView(historyNotice);
+            history = new ListView(this); history.setDivider(null); history.setDividerHeight(0); history.setTranscriptMode(ListView.TRANSCRIPT_MODE_DISABLED);
+            history.setCacheColorHint(Color.TRANSPARENT); history.setClipToPadding(false); history.setPadding(0,dp(8),0,dp(8));
+            chatAdapter = new ChatAdapter(); history.setAdapter(chatAdapter); root.addView(history, new LinearLayout.LayoutParams(-1, 0, 1));
             TextView notice = text(chatAllowed() ? "Chat can invoke this Puck’s tools under its existing permissions. Mobile cannot approve requests." : "Read-only device • Chat was not granted at pairing.", 12, MUTED); root.addView(notice);
-            composer = input("Message this Puck", false); composer.setFilters(new InputFilter[]{new InputFilter.LengthFilter(12000)}); composer.setMinLines(1); composer.setMaxLines(4); composer.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); root.addView(composer);
-            send = button("Send", this::sendMessage); send.setEnabled(canSend() && !mutating); composer.setEnabled(chatAllowed()); root.addView(send);
+            composer = input("Message this Puck", false); composer.setFilters(new InputFilter[]{new InputFilter.LengthFilter(12000)}); composer.setMinLines(1); composer.setMaxLines(4); composer.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); composer.setText(drafts.containsKey(selected) ? drafts.get(selected) : "");
+            LinearLayout composeRow = new LinearLayout(this); composeRow.setGravity(Gravity.BOTTOM); composeRow.addView(composer,new LinearLayout.LayoutParams(0,-2,1));
+            send = button("Send ↑", this::sendMessage); send.setEnabled(canSend() && !mutating); composer.setEnabled(chatAllowed()); composeRow.addView(send,new LinearLayout.LayoutParams(dp(86),dp(52))); root.addView(composeRow);
         } else {
-            if (next.equals("sessions")) { root.addView(text(GrantSummary.describe(device), 12, MUTED)); Button create = button("＋ New safe session", this::createSession); create.setEnabled(hasScope("create") && !mutating); root.addView(create); }
+            if (next.equals("sessions")) {
+                TextView section = text(category,24,INK); section.setTypeface(null,Typeface.BOLD); root.addView(section);
+                EditText find=input("Search authorized chats",false); find.setSingleLine(true); find.setText(search); root.addView(find);
+                find.addTextChangedListener(new TextWatcher(){ public void beforeTextChanged(CharSequence s,int st,int c,int a){} public void onTextChanged(CharSequence s,int st,int before,int count){search=s.toString();renderSessions();} public void afterTextChanged(Editable e){} });
+                root.addView(text("Only this device’s granted chats appear. Missing Pucks? Review access on desktop; permissions are never expanded here.",12,MUTED)); Button create = button("＋ New safe session", this::createSession); create.setEnabled(hasScope("create") && !mutating); root.addView(create); }
             if (next.equals("pages") || next.equals("page")) root.addView(text("Static Pages preview • scripts, source actions, links and external resources disabled. Inline styles and embedded images only.", 12, MUTED));
             ScrollView scroll = new ScrollView(this); content = column(); scroll.addView(content); root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
             root.addView(button("Refresh", () -> refresh(true)));
@@ -176,9 +202,10 @@ public final class MainActivity extends Activity {
             } catch (Exception e) {
                 main.post(() -> { if (epoch != generation || isDestroyed()) return; reading = false; failures++;
                     if (e instanceof Api.Failure && ((Api.Failure)e).status == 401) {
-                        api = null; connection.setText("Device authorization expired or revoked. Re-pair from Device. Cached view is not current.");
+                        api = null; if(activity!=null)activity.setText("Authorization revoked or expired • re-pair from Device"); connection.setText("Device authorization expired or revoked. Re-pair from Device. Cached view is not current.");
                         if (send != null) send.setEnabled(false); return;
                     }
+                    if(activity!=null && screen.equals("chat"))activity.setText("Reconnecting • " + safeError(e));
                     connection.setText("Not current • " + safeError(e) + " • Read retry in " + Policy.pollDelay(failures, processing)/1000 + "s"); schedule(); });
             }
         });
@@ -198,27 +225,27 @@ public final class MainActivity extends Activity {
             JSONObject s = data.optJSONObject("session"); if (s == null) { connection.setText("Invalid session response"); return; }
             processing = s.optBoolean("isProcessing"); permissionMode = s.optString("permissionMode");
             send.setEnabled(canSend() && !mutating);
-            detailMeta.setText(sessionLabel(s) + "\n" + selected + (s.optString("permissionMode").isEmpty() ? "" : " · " + s.optString("permissionMode"))
+            updateText(detailMeta, sessionLabel(s) + (s.optString("permissionMode").isEmpty() ? "" : " · " + s.optString("permissionMode"))
                 + (processing ? "\nRefreshing snapshots every 2 seconds (not token streaming)." : "")
                 + (chatAllowed() && !canSend() ? "\nMessaging this Puck needs the existing-permissions grant on desktop." : ""));
             JSONArray list = data.optJSONArray("messages"); if (list == null) list = new JSONArray();
-            String key = list.toString() + data.optBoolean("truncated"); if (key.equals(transcriptKey)) return; transcriptKey = key;
-            int y = history.getScrollY(); boolean bottom = messages.getHeight() <= history.getHeight() + y + dp(80);
-            messages.removeAllViews();
-            if (data.optBoolean("truncated")) messages.addView(text("Recent history only • older messages omitted by server.", 12, MUTED));
-            if (list.length() == 0) messages.addView(text("No messages yet. Start a conversation below.", 16, MUTED));
-            for (int i=0; i<list.length(); i++) {
-                JSONObject m = list.optJSONObject(i); if (m == null || m.optBoolean("hidden")) continue;
-                LinearLayout bubble = column(); bubble.setPadding(dp(12), dp(6), dp(12), dp(10));
-                GradientDrawable bg = new GradientDrawable(); bg.setColor("user".equals(m.optString("role")) ? Color.rgb(224, 234, 226) : Color.WHITE); bg.setCornerRadius(dp(12)); bubble.setBackground(bg);
-                LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.setMargins(0, dp(5), 0, dp(5)); messages.addView(bubble, p);
-                String timestamp = m.optLong("timestamp") > 0 ? " · " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(new Date(m.optLong("timestamp"))) : "";
-                TextView role = text(m.optString("role", "message") + timestamp, 12, MUTED); bubble.addView(role);
-                TextView body = text(m.optString("content"), 16, INK); body.setTextIsSelectable(true); bubble.addView(body);
+            String assistantKey=""; for(int i=0;i<list.length();i++){JSONObject m=list.optJSONObject(i);if(m!=null&&"assistant".equals(m.optString("role")))assistantKey=m.optString("id")+":"+m.optString("content");}
+            if (awaitingReply && !processing && !assistantKey.isEmpty() && !assistantKey.equals(acceptedAssistantKey)) { awaitingReply=false; lastActivity="Reply received"; }
+            else if(wasProcessing && !processing && !awaitingReply) lastActivity="Work stopped • check latest reply";
+            updateText(activity, mutating ? "Sending once…" : processing ? "● Working • refreshing" : awaitingReply ? "Accepted • waiting for reply" : lastActivity.isEmpty() ? "Ready" : lastActivity);
+            wasProcessing=processing;
+            updateText(historyNotice, data.optBoolean("truncated") ? "Recent 100 messages • older history available on desktop" : list.length()==0 ? "No messages yet. Say hello below." : "");
+            if(chatModel.update(list)) {
+                int first=history.getFirstVisiblePosition(); View top=history.getChildAt(0); int offset=top==null?0:top.getTop();
+                boolean bottom=history.getCount()==0 || (history.getLastVisiblePosition()>=history.getCount()-1 && (history.getChildCount()==0 || history.getChildAt(history.getChildCount()-1).getBottom()<=history.getHeight()+dp(64)));
+                String anchor=first<chatAdapter.priorIds.size()?chatAdapter.priorIds.get(first):"";
+                chatAdapter.notifyDataSetChanged(); chatAdapter.remember();
+                if(bottom)history.setSelection(Math.max(0,chatModel.rows.size()-1));
+                else {int index=first;for(int i=0;i<chatModel.rows.size();i++)if(chatModel.rows.get(i).key.equals(anchor)){index=i;break;}history.setSelectionFromTop(index,offset);}
             }
-            history.post(() -> { if (bottom) history.fullScroll(View.FOCUS_DOWN); else history.scrollTo(0, y); });
             return;
         }
+        if(screen.equals("sessions")) { JSONArray incoming=data.optJSONArray("sessions"); if(incoming==null)return; String key=incoming.toString(); if(!key.equals(listKey)){listKey=key;sessionSnapshot=incoming;renderSessions();}return; }
         disposePage(); content.removeAllViews();
         if (screen.equals("page")) {
             JSONObject page = data.optJSONObject("page"); content.addView(text(page == null ? selected : page.optString("name", selected), 22, INK));
@@ -254,6 +281,48 @@ public final class MainActivity extends Activity {
             if (!parent.isEmpty()) content.addView(button("↳ Parent: " + parent, () -> shell("chat", parent)));
         }
     }
+    private void showDrawer() {
+        android.app.Dialog drawer = new android.app.Dialog(this);
+        LinearLayout panel=column();panel.setPadding(dp(20),dp(30),dp(20),dp(24));panel.setBackgroundColor(Color.rgb(244,247,246));
+        TextView title=text("Scoville Agents",24,INK);title.setTypeface(null,Typeface.BOLD);panel.addView(title);panel.addView(text("Your private workspace",13,MUTED));
+        String[] sections={"Pucks","Automations","Subagents","Other chats","Pages","Device & access"};
+        for(int i=0;i<sections.length;i++){final int which=i;panel.addView(button(sections[i],()->{drawer.dismiss();
+            if(which<4){category=sections[which];search="";shell("sessions","");}
+            else if(which==4)shell("pages","");else deviceDialog();}));}
+        panel.addView(text("Device grants stay unchanged. Only authorized conversations are shown.",13,MUTED));
+        drawer.setContentView(panel); android.view.Window w=drawer.getWindow();if(w!=null){w.setBackgroundDrawableResource(android.R.color.transparent);w.setGravity(Gravity.LEFT);w.setLayout(dp(290),-1);}drawer.show();if(w!=null)w.setLayout(dp(290),-1);
+    }
+
+    private void renderSessions() {
+        if(content==null||!screen.equals("sessions"))return;
+        ArrayList<JSONObject> items=new ArrayList<>();
+        for(int i=0;i<sessionSnapshot.length();i++){JSONObject item=sessionSnapshot.optJSONObject(i);if(item!=null&&category.equals(ChatModel.group(item)) && item.optString("name",item.optString("id")).toLowerCase(java.util.Locale.ROOT).contains(search.toLowerCase(java.util.Locale.ROOT)))items.add(item);}
+        Collections.sort(items,(a,b)->{if(ChatModel.primary(a)!=ChatModel.primary(b))return ChatModel.primary(a)?-1:1;return Long.compare(b.optLong("lastMessageAt"),a.optLong("lastMessageAt"));});
+        content.removeAllViews();
+        if(items.isEmpty())content.addView(text(category.equals("Pucks")?"No Pucks visible in this grant. Check device access on desktop, or choose another section from ☰.":"No matching chats.",16,MUTED));
+        for(JSONObject item:items){String id=item.optString("id"); LinearLayout row=column();row.setPadding(dp(12),dp(10),dp(12),dp(10));
+            GradientDrawable bg=new GradientDrawable();bg.setColor(Color.WHITE);bg.setCornerRadius(dp(14));row.setBackground(bg);
+            TextView title=text((ChatModel.primary(item)?"★  ":"")+item.optString("name",id),18,INK);title.setTypeface(null,Typeface.BOLD);row.addView(title);
+            row.addView(text(item.optBoolean("isProcessing")?"● Working":"Open conversation  ›",13,MUTED));
+            row.setContentDescription(title.getText()+". "+(item.optBoolean("isProcessing")?"Working":"Open chat"));row.setFocusable(true);row.setOnClickListener(v->shell("chat",id));
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.setMargins(0,dp(4),0,dp(4));content.addView(row,lp);
+        }
+    }
+    private final class ChatAdapter extends BaseAdapter {
+        final ArrayList<String> priorIds=new ArrayList<>();
+        void remember(){priorIds.clear();for(ChatModel.Row r:chatModel.rows)priorIds.add(r.key);}
+        public int getCount(){return chatModel.rows.size();} public Object getItem(int n){return chatModel.rows.get(n);} public long getItemId(int n){return chatModel.rows.get(n).stableId;} public boolean hasStableIds(){return true;}
+        public View getView(int n,View recycled,ViewGroup parent){
+            LinearLayout wrapper; LinearLayout bubble; TextView body,meta;
+            if(recycled==null){wrapper=new LinearLayout(MainActivity.this); wrapper.setPadding(0,dp(4),0,dp(4));bubble=column();bubble.setPadding(dp(14),dp(6),dp(14),dp(8));body=text("",17,INK);body.setTextIsSelectable(true);meta=text("",11,MUTED);bubble.addView(body);bubble.addView(meta);wrapper.addView(bubble,new LinearLayout.LayoutParams(-2,-2));wrapper.setTag(new Object[]{bubble,body,meta,null});}
+            else wrapper=(LinearLayout)recycled;
+            Object[] holder=(Object[])wrapper.getTag();bubble=(LinearLayout)holder[0];body=(TextView)holder[1];meta=(TextView)holder[2];ChatModel.Row row=chatModel.rows.get(n);
+            if(holder[3]!=row){boolean user="user".equals(row.role);wrapper.setGravity(user?Gravity.RIGHT:Gravity.LEFT);wrapper.setPadding(user?dp(34):0,dp(4),user?0:dp(24),dp(4));
+                GradientDrawable bg=new GradientDrawable();bg.setColor(user?Color.rgb(218,242,226):Color.WHITE);bg.setCornerRadius(dp(16));bubble.setBackground(bg);
+                body.setText(row.content);meta.setText((user?"You":"Puck")+(row.timestamp>0?" · "+DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(row.timestamp)):""));holder[3]=row;}
+            return wrapper;
+        }
+    }
     private void sendMessage() {
         if (mutating || !canSend()) return;
         String value = composer.getText().toString().trim(); if (value.isEmpty()) return;
@@ -271,34 +340,42 @@ public final class MainActivity extends Activity {
     }
     private void mutation(String path, JSONObject body, boolean creating) {
         if (mutating || api == null) return;
-        mutating = true; if (send != null) send.setEnabled(false); connection.setText(creating ? "Creating…" : "Sending once…");
+        mutating = true; if (send != null) send.setEnabled(false); if(activity!=null)activity.setText("Sending once…"); connection.setText(creating ? "Creating…" : "Sending once…");
         int epoch = generation; Api client = api;
         io.execute(() -> {
             try {
                 JSONObject result = client.request("POST", path, body);
                 main.post(() -> { mutating = false; if (epoch != generation || isDestroyed()) return;
                     if (creating) { JSONObject s = result.optJSONObject("session"); if (s != null) shell("chat", s.optString("id")); else connection.setText("Created. Refresh the session list."); }
-                    else { composer.setText(""); send.setEnabled(canSend()); connection.setText("Accepted by server. Waiting for next snapshot…"); refresh(false); }
+                    else { acceptedAssistantKey=""; for(ChatModel.Row r:chatModel.rows)if("assistant".equals(r.role))acceptedAssistantKey=r.id+":"+r.content; awaitingReply=true; lastActivity="Accepted • waiting for reply"; activity.setText(lastActivity); composer.setText(""); drafts.remove(selected); send.setEnabled(canSend()); connection.setText("Accepted by server. Waiting for next snapshot…"); refresh(false); }
                 });
             } catch (Exception e) { main.post(() -> { mutating = false; if (epoch != generation || isDestroyed()) return;
-                if (send != null) send.setEnabled(canSend());
+                if (send != null) send.setEnabled(canSend()); if(activity!=null)activity.setText("Send unconfirmed • check history before retrying");
                 new AlertDialog.Builder(this).setTitle("Request not confirmed").setMessage(safeError(e) + "\n\nNot automatically retried. The server may have accepted this request before the connection failed. Refresh history/list before manually trying again.").setPositiveButton("OK", null).show(); refresh(true);
             }); }
         });
     }
     private String safeError(Exception e) {
         if (e instanceof Api.Failure) return "Server " + ((Api.Failure)e).status + " (" + ((Api.Failure)e).code + ").";
-        if (e instanceof javax.net.ssl.SSLException) return "TLS verification failed. A trusted HTTPS certificate is required.";
-        return "Server unavailable or connection interrupted.";
+        return TransportError.describe(e); // sanitized cause category; never exception payloads
+
     }
     private void deviceDialog() {
         String info = device == null ? "Not paired" : apiOrigin() + "\nWorkspace: " + device.optString("workspaceId") + "\nDevice: " + device.optString("deviceId") + "\n\n" + GrantSummary.describe(device) + "\n\n" + (chatAllowed() ? "Chat can invoke the target Puck’s tools under its existing permissions." : "Chat is not granted.") + "\nDesktop consent: " + device.optString("consent", "Not recorded; verify on desktop.");
         new AlertDialog.Builder(this).setTitle("This device").setMessage(info + "\n\nDisconnect removes the local credential only. Revoke this device on your trusted desktop to invalidate it server-side.")
             .setNegativeButton("Close", null).setPositiveButton("Disconnect / re-pair", (d,w) -> {
                 if (mutating) { connection.setText("Wait for the pending request before disconnecting."); return; }
-                try { store.clear(); device = null; api = null; send = null; enrollment(); }
+                try { store.clear(); clearCredentialViews(); device = null; api = null; send = null; enrollment(); }
                 catch (Exception e) { connection.setText("Could not erase local credential. Try again or clear app storage in Android Settings."); }
             }).show();
+    }
+    private void clearCredentialViews() {
+        main.removeCallbacks(poll); generation++; reading=false;
+        drafts.clear(); sessionSnapshot=new JSONArray(); listKey=""; search=""; category="Pucks";
+        chatModel.rows.clear(); transcriptKey=""; awaitingReply=false; wasProcessing=false; processing=false; lastActivity=""; acceptedAssistantKey="";
+        if(composer!=null)composer.setText(""); composer=null; activity=null; historyNotice=null;
+        if(content!=null)content.removeAllViews(); content=null; if(history!=null)history.setAdapter(null); history=null; chatAdapter=null;
+        disposePage(); if(root!=null)root.removeAllViews();
     }
     private void disposePage() {
         if (pageView != null) {
