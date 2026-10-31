@@ -81,7 +81,7 @@ export function createDesktopControlRuntime(config: DesktopControlDeployment, au
     },
     entitlementExpiresAt: expiresAt,
     confirmInputDrained: () => new Promise<void>((resolve, reject) => {
-      execFile(config.drainHelper, [], { cwd: '/tmp', timeout: 1500, maxBuffer: 1024, env: { PATH: '/usr/bin:/bin' } }, (error, stdout) => {
+      execFile(config.drainHelper, [], { cwd: '/tmp', timeout: 6000, maxBuffer: 1024, env: { PATH: '/usr/bin:/bin' } }, (error, stdout) => {
         if (error || stdout !== 'SCOVILLE_INPUT_DRAINED\n') reject(new Error('Desktop input drain not confirmed'))
         else resolve()
       })

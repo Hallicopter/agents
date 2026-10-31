@@ -6,7 +6,7 @@ import { WebSocket } from 'ws'
 import { DesktopGateway } from './gateway'
 import { InputArbiter } from './input-arbiter'
 
-for (const proof of [true, false]) test(`control disconnect releases held input; host proof=${proof}`, async () => {
+for (const proof of [true, false, 'slow'] as const) test(`control disconnect releases held input; host proof=${proof}`, async () => {
   const seen: Buffer[] = []; const sockets = new Set<Socket>()
   const upstream = tcpServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket))
@@ -48,7 +48,7 @@ for (const proof of [true, false]) test(`control disconnect releases held input;
   let proved = false
   const origin = 'https://fixture.test'
   const gateway = new DesktopGateway({ origin, trustedTlsIngress: true, upstream: { host: '127.0.0.1', port: (upstream.address() as any).port, password: async () => 'fixture' }, authorize: async () => false, authorizeRpc: async () => true,
-    control: { arbiter, authorizeRpc: async () => true, entitlementExpiresAt: () => Date.now() + 60000, confirmInputDrained: async () => { proved = true; if (!proof) throw new Error('unconfirmed') } } })
+    control: { arbiter, authorizeRpc: async () => true, entitlementExpiresAt: () => Date.now() + 60000, confirmInputDrained: async () => { proved = true; if (proof === 'slow') await new Promise(r => setTimeout(r, 2500)); if (!proof) throw new Error('unconfirmed') } } })
   const server = createServer(); server.on('upgrade', (req, socket, head) => gateway.upgrade(req, socket, head))
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   let ws: WebSocket | undefined
@@ -75,7 +75,7 @@ for (const proof of [true, false]) test(`control disconnect releases held input;
     for (let i = 0; i < 100 && !seen.length; i++) await new Promise(r => setTimeout(r, 10))
     expect(seen).toHaveLength(1)
     ws.close()
-    for (let i = 0; i < 200 && ['human', 'releasing'].includes(arbiter.state.phase); i++) await new Promise(r => setTimeout(r, 10))
+    for (let i = 0; i < 600 && ['human', 'releasing'].includes(arbiter.state.phase); i++) await new Promise(r => setTimeout(r, 10))
     expect(seen.some(packet => packet[0] === 4 && packet[1] === 0)).toBe(true)
     expect(proved).toBe(true)
     expect(arbiter.state.phase).toBe(proof ? 'idle' : 'quarantine')

@@ -4,7 +4,7 @@
 # profile/cookie reads, arbitrary arguments, new display, or desktop restart.
 set -eu
 cd /tmp
-exec /usr/bin/sudo -n -u agent-container /usr/bin/env HOME=/var/lib/agent-container XDG_RUNTIME_DIR=/run/user/1002 /usr/bin/podman exec -i agent-desktop-minimal /usr/bin/timeout --kill-after=1s 1s /usr/bin/python3 - <<'PY'
+exec /usr/bin/sudo -n -u agent-container /usr/bin/env HOME=/var/lib/agent-container XDG_RUNTIME_DIR=/run/user/1002 /usr/bin/podman exec -i agent-desktop-minimal /usr/bin/timeout --kill-after=1s 5s /usr/bin/python3 - <<'PY'
 import os, ctypes
 os.environ['HOME'] = '/nonexistent/scoville-drain'
 os.environ['XAUTHORITY'] = '/nonexistent/scoville-drain'

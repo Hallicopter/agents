@@ -63,16 +63,20 @@ export function controlStream(ws: WebSocket, grant: ControlGrant, endpoint: Desk
     closing = true
     clearTimeout(handshake); clearTimeout(lifetime); clearInterval(revalidation); clearInterval(heartbeat)
     try { arbiter.beginRelease(lease) } catch { quarantine(); finish(); return }
+    let releaseStage = 'release-events'
     void (async () => {
       if (accepted) {
         // Never destroy a still-live upstream on WS loss before attempting this.
         for (const message of state.releases()) write(message)
+        releaseStage = 'fence'
         await barrier.wait(2000)
+        releaseStage = 'host-drain'
         await hostProof(() => options.confirmInputDrained(grant.scope))
         state.confirmReleased()
       }
+      releaseStage = 'arbiter'
       arbiter.finishRelease(lease, true)
-    })().catch(() => { console.warn('[desktop-control] release proof failed'); quarantine() }).finally(finish)
+    })().catch(() => { console.warn('[desktop-control] release proof failed at ' + releaseStage); quarantine() }).finally(finish)
   }
   function lost(): void {
     if (settled) return
@@ -205,7 +209,7 @@ function rawBuffer(data: RawData): Buffer { return Array.isArray(data) ? Buffer.
 
 function hostProof(check: () => Promise<void>): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Host input drain timeout')), 2000)
+    const timer = setTimeout(() => reject(new Error('Host input drain timeout')), 8000)
     Promise.resolve().then(check).then(result => {
       clearTimeout(timer)
       if (result !== undefined) reject(new Error('Invalid host drain proof'))
