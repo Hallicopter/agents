@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { mkdtempSync, writeFileSync, rmSync, chmodSync, symlinkSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createDesktopRuntime, effectiveVncPassword, readSystemdDesktopCredential } from './desktop-runtime'
+import { createDesktopRuntime, effectiveVncPassword, readSystemdDesktopCredential, desktopEntitlementDeadline } from './desktop-runtime'
 import type { SessionManager } from '@craft-agent/server-core/sessions'
 
 const scope = { workspaceId: 'ws', sessionId: 's' }
@@ -12,7 +12,7 @@ const renderer = 'http://localhost:5173'
 function fixture(electronOrigin?: 'null' | 'file://') {
   const dir = mkdtempSync(join(tmpdir(), 'desktop-runtime-'))
   const path = join(dir, 'config.json')
-  const config = { origin, rpcOrigin: renderer, ...(electronOrigin === undefined ? {} : { electronOrigin }), upstream: { host: '127.0.0.1', port: 5902, passwordFile: join(dir, 'not-read') }, entitlements: [{ ...scope, expiresAt: new Date(Date.now() + 60000).toISOString() }] }
+  const config = { origin, rpcOrigin: renderer, ...(electronOrigin === undefined ? {} : { electronOrigin }), upstream: { host: '127.0.0.1', port: 5902, passwordFile: join(dir, 'not-read') }, entitlements: [{ ...scope, expiresAt: new Date(Date.now() + 60000).toISOString() as string | null }] }
   const save = () => writeFileSync(path, JSON.stringify(config), { mode: 0o600 })
   save()
   writeFileSync(`${path}.revoked`, '', { mode: 0o600 })
@@ -134,4 +134,24 @@ for (const origin of ['null', 'file://'] as const) test(`packaged renderer origi
     expect((await configured.runtime.gateway.issueRpcGrant(ctx, 's', origin, () => true)).mode).toBe('watch')
     await expect(configured.runtime.gateway.issueRpcGrant(ctx, 's', origin === 'null' ? 'file://' : 'null', () => true)).rejects.toThrow()
   } finally { defaultRuntime.close(); configured.close() }
+})
+
+test('persistent access remains scoped and explicitly revocable without calendar renewal', async () => {
+  const f = fixture()
+  try {
+    f.config.entitlements[0]!.expiresAt = null
+    f.save()
+    expect((await f.runtime.gateway.issueRpcGrant(ctx, 's', renderer, () => true)).mode).toBe('watch')
+    await expect(f.runtime.gateway.issueRpcGrant(ctx, 'foreign', renderer, () => true)).rejects.toThrow()
+    await f.manager.cancelProcessing('s')
+    await expect(f.runtime.gateway.issueRpcGrant(ctx, 's', renderer, () => true)).rejects.toThrow()
+  } finally { f.close() }
+})
+test('persistent entitlement supplies only a bounded per-connection control deadline', () => {
+  const now = Date.now()
+  expect(desktopEntitlementDeadline(null)).toBeGreaterThanOrEqual(now + 300000)
+  expect(desktopEntitlementDeadline(null)).toBeLessThanOrEqual(Date.now() + 300000)
+  expect(Number.isNaN(desktopEntitlementDeadline(undefined as any))).toBe(true)
+  expect(Number.isNaN(desktopEntitlementDeadline('invalid'))).toBe(true)
+  expect(desktopEntitlementDeadline('2000-01-01T00:00:00Z')).toBeLessThan(now)
 })

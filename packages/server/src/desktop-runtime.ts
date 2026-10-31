@@ -10,7 +10,15 @@ export interface DesktopDeployment {
   electronOrigin?: 'null' | 'file://'
   upstream: { host: string; port: number; passwordFile: string }
   control?: DesktopControlDeployment
-  entitlements: Array<DesktopScope & { expiresAt: string; control?: boolean }>
+  entitlements: Array<DesktopScope & { expiresAt: string | null; control?: boolean }>
+}
+
+/** Explicit null opts into persistent access; missing/invalid expiry never grants access.
+ * Individual Control connections remain bounded to five minutes by the gateway.
+ */
+export function desktopEntitlementDeadline(expiresAt: string | null): number {
+  if (expiresAt === null) return Date.now() + 300_000
+  return typeof expiresAt === 'string' ? Date.parse(expiresAt) : NaN
 }
 
 /** Open once, refuse links, and verify the same inode we read/write. */
@@ -91,11 +99,11 @@ export function createDesktopRuntime(path: string | undefined) {
     if (disabled || revoked.has(scope.sessionId) || readRevocations().has(scope.sessionId)) return false
     const current = load()
     if (JSON.stringify({ ...current, entitlements: [] }) !== JSON.stringify({ ...initial, entitlements: [] })) return false
-    return current.entitlements.some(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && Date.parse(e.expiresAt) > Date.now())
+    return current.entitlements.some(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && desktopEntitlementDeadline(e.expiresAt) > Date.now())
   }
   const controlRuntime = initial.control ? createDesktopControlRuntime(initial.control,
-    scope => permitted(scope) && load().entitlements.some(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && e.control === true && Date.parse(e.expiresAt) > Date.now()),
-    scope => Math.max(0, ...load().entitlements.filter(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && e.control === true).map(e => Date.parse(e.expiresAt)))) : undefined
+    scope => permitted(scope) && load().entitlements.some(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && e.control === true && desktopEntitlementDeadline(e.expiresAt) > Date.now()),
+    scope => Math.max(0, ...load().entitlements.filter(e => e.workspaceId === scope.workspaceId && e.sessionId === scope.sessionId && e.control === true).map(e => desktopEntitlementDeadline(e.expiresAt)))) : undefined
   const gateway = new DesktopGateway({
     control: controlRuntime?.control,
     origin: initial.origin,
