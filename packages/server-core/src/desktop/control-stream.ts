@@ -81,7 +81,7 @@ export function controlStream(ws: WebSocket, grant: ControlGrant, endpoint: Desk
   }
   const send = (message: Buffer) => {
     if (closing) return
-    if (ws.readyState !== 1 || ws.bufferedAmount + message.length > 65536) { close(); return }
+    if (ws.readyState !== 1 || ws.bufferedAmount + message.length > 16 * 1024 * 1024) { close(); return }
     ws.send(message, { binary: true }, error => { if (error) close() })
   }
   const handshake = setTimeout(close, 10_000)

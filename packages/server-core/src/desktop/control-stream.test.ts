@@ -23,6 +23,7 @@ for (const proof of [true, false]) test(`control disconnect releases held input;
         else if (pending[0] === 0) size = 20
         else if (pending[0] === 2) { if (pending.length < 4) return; size = 4 + pending.readUInt16BE(2) * 4 }
         else if (pending[0] === 248) { if (pending.length < 9) return; size = 9 + pending[8]! }
+        else if (pending[0] === 3) size = 10
         else if (pending[0] === 4) size = 8
         else if (pending[0] === 5) size = 6
         else throw new Error('Unexpected fixture input')
@@ -32,9 +33,13 @@ for (const proof of [true, false]) test(`control disconnect releases held input;
         else if (step === 1) { socket.write(Buffer.alloc(16)); step++ }
         else if (step === 2) { socket.write(Buffer.alloc(4)); step++ }
         else if (step === 3) {
-          const init = Buffer.alloc(24); init.writeUInt16BE(20, 0); init.writeUInt16BE(20, 2); socket.write(init); step++
+          const init = Buffer.alloc(24); init.writeUInt16BE(1440, 0); init.writeUInt16BE(900, 2); socket.write(init); step++
         } else if (packet[0] === 248) { packet.writeUInt32BE(1, 4); socket.write(packet) }
-        else if (packet[0] === 4 || packet[0] === 5) seen.push(packet)
+        else if (packet[0] === 3) {
+          const frame = Buffer.alloc(16 + 1440 * 900 * 4)
+          frame.writeUInt16BE(1, 2); frame.writeUInt16BE(1440, 8); frame.writeUInt16BE(900, 10)
+          socket.write(frame)
+        } else if (packet[0] === 4 || packet[0] === 5) seen.push(packet)
       }
     })
   })
@@ -57,7 +62,10 @@ for (const proof of [true, false]) test(`control disconnect releases held input;
         if (step === 0) { ws!.send(Buffer.from('RFB 003.008\n')); step++ }
         else if (step === 1) { ws!.send(Buffer.from([1])); step++ }
         else if (step === 2) { ws!.send(Buffer.from([1])); step++ }
-        else if (step === 3) { step++; resolve() }
+        else if (step === 3) {
+          step++
+          const request = Buffer.alloc(10); request[0] = 3; request.writeUInt16BE(1440, 6); request.writeUInt16BE(900, 8); ws!.send(request)
+        } else if (step === 4) { expect(Buffer.byteLength(data as Buffer)).toBe(16 + 1440 * 900 * 4); step++; resolve() }
       })
     })
     await once(ws, 'open'); ws.send(JSON.stringify({ token: grant.token })); await initialized
