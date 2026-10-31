@@ -1,5 +1,7 @@
 # Install and update Scoville Agents
 
+The first Apple Silicon preview is [available here](https://github.com/Hallicopter/agents/releases/tag/scoville-preview-1a335d6828e9).
+
 Scoville downloads belong to [Hallicopter/agents Releases](https://github.com/Hallicopter/agents/releases), not the upstream Craft download site. The release workflow supports downloadable previews now and signed releases once Apple signing credentials are available. Previews use ad-hoc signing, not an Apple-verified Developer ID, and require manual updates.
 
 ## Install on your M1 Mac

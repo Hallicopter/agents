@@ -64,7 +64,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 'apps/electron/release/mac-arm64/Scoville Agents.app'
           bun -e 'const c=Bun.YAML.parse(await Bun.file("apps/electron/release/mac-arm64/Scoville Agents.app/Contents/Resources/app-update.yml").text()); if(c.provider!=="github"||c.owner!=="Hallicopter"||c.repo!=="agents")throw Error("Wrong update feed")'
           cd apps/electron/release
-          shasum -a 256 *.dmg *.zip > SHA256SUMS
+          shasum -a 256 Scoville-Agents-arm64.dmg Scoville-Agents-arm64.zip > SHA256SUMS
       - name: Verify signed and notarized release
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -79,8 +79,8 @@ jobs:
           name: scoville-mac-arm64-${{ github.sha }}
           if-no-files-found: error
           path: |
-            apps/electron/release/*.dmg
-            apps/electron/release/*.zip
+            apps/electron/release/Scoville-Agents-arm64.dmg
+            apps/electron/release/Scoville-Agents-arm64.zip
             apps/electron/release/*.blockmap
             apps/electron/release/latest-mac.yml
             apps/electron/release/SHA256SUMS
@@ -115,4 +115,4 @@ jobs:
 
           Built directly from the linked fork commit. SHA256SUMS is included for download verification.
           NOTES
-          gh release create "scoville-preview-${GITHUB_SHA:0:12}" release/*.dmg release/*.zip release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Scoville Agents preview (${GITHUB_SHA:0:8})" --notes-file notes.md
+          gh release create "scoville-preview-${GITHUB_SHA:0:12}" release/Scoville-Agents-arm64.dmg release/Scoville-Agents-arm64.zip release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Scoville Agents preview (${GITHUB_SHA:0:8})" --notes-file notes.md

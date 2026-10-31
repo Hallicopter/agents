@@ -218,7 +218,7 @@ cd "$ELECTRON_DIR"
 export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-true}"
 
 # Build electron-builder arguments
-BUILDER_ARGS="--mac --${ARCH} --publish never"
+BUILDER_ARGS="--mac dmg:${ARCH} zip:${ARCH} --publish never"
 
 # Add code signing if identity is available
 if [ -n "$APPLE_SIGNING_IDENTITY" ]; then

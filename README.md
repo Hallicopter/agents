@@ -14,7 +14,7 @@ This is [Hallicopter/agents](https://github.com/Hallicopter/agents), a maintaine
 
 ### Install and update Scoville
 
-Use the fork’s [Releases page](https://github.com/Hallicopter/agents/releases) for the Mac app. Previews install from a DMG and update by replacing the app; signed in-app updates are pending Apple signing credentials. See [installation, updates, and maintainer release setup](docs/scoville-releases.md). No local development server is needed for a packaged client.
+Download the [M1/M2/M3/M4 Mac preview DMG](https://github.com/Hallicopter/agents/releases/download/scoville-preview-1a335d6828e9/Scoville-Agents-arm64.dmg), or use the fork’s [Releases page](https://github.com/Hallicopter/agents/releases) for newer builds. Previews install from a DMG and update by replacing the app; signed in-app updates are pending Apple signing credentials. See [installation, updates, and maintainer release setup](docs/scoville-releases.md). No local development server is needed for a packaged client.
 
 ### Changes from upstream
 
