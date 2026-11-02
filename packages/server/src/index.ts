@@ -28,7 +28,7 @@
  */
 
 import { join } from 'node:path'
-import { createDesktopRuntime } from './desktop-runtime'
+import { startDesktopRuntime } from './desktop-startup'
 import { readFileSync, existsSync } from 'node:fs'
 import { version as packageVersion } from '../package.json'
 import { enableDebug } from '@craft-agent/shared/utils/debug'
@@ -117,8 +117,7 @@ if (tlsCertPath || tlsKeyPath) {
 }
 
 // Explicit opt-in operator deployment; password is never placed in configuration.
-const desktopRuntime = createDesktopRuntime(process.env.CRAFT_DESKTOP_CONFIG)
-await desktopRuntime?.ready
+const desktopRuntime = await startDesktopRuntime(process.env.CRAFT_DESKTOP_CONFIG)
 
 // Web UI configuration
 const webuiDir = process.env.CRAFT_WEBUI_DIR || undefined

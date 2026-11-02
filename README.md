@@ -18,6 +18,8 @@ Download the [M1/M2/M3/M4 Mac preview DMG](https://github.com/Hallicopter/agents
 
 ### Changes from upstream
 
+- **Startup recovery:** verified abandoned desktop/Android admin sockets are preserved and cleared by the deployed service preflight; optional desktop failures no longer stop chat or Telegram. See [server recovery](docs/server-startup-recovery.md).
+
 - **Scoville desktop window:** native movable/resizable Electron viewer and authenticated WebUI pop-out; simple View only/Control UI, with Control unavailable unless the server explicitly enables it. Authorized sessions can have persistent desktop access without manual renewal; individual Control connections remain bounded to five minutes. The optional brokered input implementation and verified production cutover are documented in [desktop-viewer-fork.md](docs/desktop-viewer-fork.md).
 - **Bounded workspace watching:** watches configuration directories without recursively following session artifacts, dependency trees, or browser socket links. Watch errors are handled instead of crashing the server.
 
