@@ -9,7 +9,7 @@ its independent security review passes; artifact delivery grants no backend acce
 
 The handler reads only a regular non-symlink file, bounded to 37,267 bytes, and
 pins SHA-256 to
-`b2c5df8299d746d774026d1886d9598dc75ec0bb8ae729ff7a575bb60d3c7d16`.
+`38e206e029db5e18856ce7ec6da218c84aa9601c2d1c261a99a1ed2025643f11`.
 It serves validated immutable memory, not a directory or request-selected path.
 A different APK needs a separately reviewed hash/size change. Invalid configured
 artifacts fail startup closed. GET/HEAD only; query strings and other download

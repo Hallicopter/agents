@@ -29,7 +29,7 @@ import org.json.JSONObject;
 
 /** Native, deliberately small companion. Sensitive transcript data lives in memory only. */
 public final class MainActivity extends Activity {
-    private static final int INK = Color.rgb(34, 44, 39), MUTED = Color.rgb(102, 111, 104), GREEN = Color.rgb(56, 99, 84);
+    private static final int INK = Color.rgb(24, 43, 38), MUTED = Color.rgb(91, 108, 100), GREEN = Color.rgb(0, 106, 82);
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private CredentialStore store;
@@ -80,7 +80,24 @@ public final class MainActivity extends Activity {
     }
     private void updateText(TextView view, String value) { if(!android.text.TextUtils.equals(view.getText(),value))view.setText(value); }
     private Button button(String label, Runnable action) {
-        Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextColor(GREEN); b.setMinHeight(dp(48)); b.setOnClickListener(v -> action.run()); return b;
+        Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextColor(GREEN); b.setMinHeight(dp(48)); b.setMinimumWidth(0); b.setElevation(0); b.setStateListAnimator(null); b.setBackground(buttonSurface(Color.TRANSPARENT,24)); b.setPadding(dp(12),0,dp(12),0); b.setOnClickListener(v -> action.run()); return b;
+    }
+    private GradientDrawable shape(int color, int radius) {
+        GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;
+    }
+    private android.graphics.drawable.Drawable buttonSurface(int color,int radius) {
+        GradientDrawable fill=shape(color,radius);fill.setColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{color==GREEN?Color.rgb(156,175,163):color,color}));
+        return new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.argb(40,0,106,82)),fill,shape(Color.WHITE,radius));
+    }
+    private void categories() {
+        HorizontalScrollView scroll=new HorizontalScrollView(this);scroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout tabs=new LinearLayout(this);tabs.setPadding(0,dp(10),0,dp(12));
+        for(String label:new String[]{"Pucks","Automations","Subagents","Other chats"}) {
+            Button tab=button(label,()->{category=label;search="";shell("sessions","");});
+            tab.setTextSize(13);tab.setTypeface(null,Typeface.BOLD);tab.setBackground(buttonSurface(category.equals(label)?Color.rgb(216,243,227):Color.rgb(240,243,241),24));
+            tab.setTextColor(category.equals(label)?GREEN:MUTED);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,dp(48));lp.setMargins(0,0,dp(8),0);tabs.addView(tab,lp);
+        }
+        scroll.addView(tabs);root.addView(scroll);
     }
     private EditText input(String hint, boolean secret) {
         EditText e = new EditText(this); e.setHint(hint); e.setTextColor(INK); e.setTextSize(16); e.setSaveEnabled(false);
@@ -90,16 +107,16 @@ public final class MainActivity extends Activity {
     }
     private void base(String title, String subtitle) {
         main.removeCallbacks(poll); disposePage(); generation++; reading = false;
-        root = column(); root.setBackgroundColor(Color.rgb(244, 247, 246)); root.setPadding(dp(18), dp(12), dp(18), dp(8));
+        root = column(); root.setBackgroundColor(screen.equals("chat")?Color.rgb(242,240,232):Color.WHITE); root.setPadding(dp(18), dp(12), dp(18), dp(8));
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             root.setPadding(dp(18) + insets.getSystemWindowInsetLeft(), dp(12) + insets.getSystemWindowInsetTop(),
                 dp(18) + insets.getSystemWindowInsetRight(), dp(8) + insets.getSystemWindowInsetBottom());
             return insets.consumeSystemWindowInsets();
         });
         LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
-        if(api != null) heading.addView(button("☰", this::showDrawer), new LinearLayout.LayoutParams(dp(52),dp(48)));
-        TextView brand = text(title, 23, INK); brand.setTypeface(null, Typeface.BOLD); heading.addView(brand,new LinearLayout.LayoutParams(0,-2,1)); root.addView(heading);
-        connection = text(subtitle, 12, MUTED); connection.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); root.addView(connection);
+        if(api != null) {Button nav=button(screen.equals("chat")?"‹":"☰", ()->{if(screen.equals("chat"))shell("sessions","");else showDrawer();});nav.setContentDescription(screen.equals("chat")?"Back to chats":"Open navigation menu");heading.addView(nav,new LinearLayout.LayoutParams(dp(48),dp(48)));}
+        TextView brand = text(title, 22, GREEN); brand.setTypeface(null, Typeface.BOLD); heading.addView(brand,new LinearLayout.LayoutParams(0,-2,1)); root.addView(heading);
+        connection = text(subtitle, 11, MUTED); connection.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); root.addView(connection);
         setContentView(root);
     }
     private boolean hasScope(String scope) {
@@ -154,27 +171,29 @@ public final class MainActivity extends Activity {
         awaitingReply = false; wasProcessing = false; lastActivity = ""; acceptedAssistantKey = ""; activity = null; chatModel.rows.clear();
         base("Scoville Agents", "Connecting…");
         if (next.equals("chat")) {
-            detailMeta = text("Loading session…", 14, MUTED); root.addView(detailMeta);
-            LinearLayout actions = new LinearLayout(this); actions.addView(button("‹ Chats", () -> shell("sessions", "")), new LinearLayout.LayoutParams(0,dp(44),1));
-            actions.addView(button("Subagents", () -> shell("children", selected)), new LinearLayout.LayoutParams(0,dp(44),1)); root.addView(actions);
-            activity = text("Connecting…", 13, GREEN); activity.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); root.addView(activity);
-            historyNotice = text("",12,MUTED); root.addView(historyNotice);
+            detailMeta = text("Loading session…", 20, INK); detailMeta.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL)); detailMeta.setMaxLines(2);detailMeta.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.CENTER_VERTICAL);actions.addView(detailMeta,new LinearLayout.LayoutParams(0,-2,1)); actions.addView(button("Subagents  ›", () -> shell("children", selected)), new LinearLayout.LayoutParams(-2,dp(48))); root.addView(actions);
+            activity = text("Connecting…", 12, GREEN); activity.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); root.addView(activity);
+            historyNotice = text("",12,MUTED); root.addView(historyNotice); historyNotice.setPadding(0,dp(2),0,dp(2));
             history = new ListView(this); history.setDivider(null); history.setDividerHeight(0); history.setTranscriptMode(ListView.TRANSCRIPT_MODE_DISABLED);
             history.setCacheColorHint(Color.TRANSPARENT); history.setClipToPadding(false); history.setPadding(0,dp(8),0,dp(8));
             chatAdapter = new ChatAdapter(); history.setAdapter(chatAdapter); root.addView(history, new LinearLayout.LayoutParams(-1, 0, 1));
             TextView notice = text(chatAllowed() ? "Chat can invoke this Puck’s tools under its existing permissions. Mobile cannot approve requests." : "Read-only device • Chat was not granted at pairing.", 12, MUTED); root.addView(notice);
-            composer = input("Message this Puck", false); composer.setFilters(new InputFilter[]{new InputFilter.LengthFilter(12000)}); composer.setMinLines(1); composer.setMaxLines(4); composer.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); composer.setText(drafts.containsKey(selected) ? drafts.get(selected) : "");
+            composer = input("Message", false); composer.setBackground(shape(Color.WHITE,26)); composer.setPadding(dp(18),dp(12),dp(16),dp(12)); composer.setFilters(new InputFilter[]{new InputFilter.LengthFilter(12000)}); composer.setMinLines(1); composer.setMaxLines(4); composer.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); composer.setText(drafts.containsKey(selected) ? drafts.get(selected) : "");
             LinearLayout composeRow = new LinearLayout(this); composeRow.setGravity(Gravity.BOTTOM); composeRow.addView(composer,new LinearLayout.LayoutParams(0,-2,1));
-            send = button("Send ↑", this::sendMessage); send.setEnabled(canSend() && !mutating); composer.setEnabled(chatAllowed()); composeRow.addView(send,new LinearLayout.LayoutParams(dp(86),dp(52))); root.addView(composeRow);
+            send = button("↑", this::sendMessage); send.setContentDescription("Send message"); send.setTextSize(24); send.setTextColor(Color.WHITE); send.setBackground(buttonSurface(GREEN,26)); send.setEnabled(canSend() && !mutating); composer.setEnabled(chatAllowed()); LinearLayout.LayoutParams sendLayout=new LinearLayout.LayoutParams(dp(52),dp(52));sendLayout.setMargins(dp(8),0,0,0);composeRow.addView(send,sendLayout); composeRow.setPadding(0,dp(8),0,dp(4)); root.addView(composeRow);
         } else {
             if (next.equals("sessions")) {
-                TextView section = text(category,24,INK); section.setTypeface(null,Typeface.BOLD); root.addView(section);
-                EditText find=input("Search authorized chats",false); find.setSingleLine(true); find.setText(search); root.addView(find);
+                LinearLayout listHeading=new LinearLayout(this);listHeading.setGravity(Gravity.CENTER_VERTICAL);
+                TextView section = text("Chats",32,INK); section.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));listHeading.addView(section,new LinearLayout.LayoutParams(0,-2,1));
+                Button create=button("＋",this::createSession);create.setContentDescription("New safe session");create.setTextSize(28);create.setEnabled(hasScope("create")&&!mutating);listHeading.addView(create,new LinearLayout.LayoutParams(dp(48),dp(48)));root.addView(listHeading);
+                EditText find=input("Search your chats",false);find.setBackground(shape(Color.rgb(241,244,242),26));find.setPadding(dp(20),dp(10),dp(16),dp(10));find.setSingleLine(true); find.setText(search);root.addView(find,new LinearLayout.LayoutParams(-1,dp(50)));
                 find.addTextChangedListener(new TextWatcher(){ public void beforeTextChanged(CharSequence s,int st,int c,int a){} public void onTextChanged(CharSequence s,int st,int before,int count){search=s.toString();renderSessions();} public void afterTextChanged(Editable e){} });
-                root.addView(text("Only this device’s granted chats appear. Missing Pucks? Review access on desktop; permissions are never expanded here.",12,MUTED)); Button create = button("＋ New safe session", this::createSession); create.setEnabled(hasScope("create") && !mutating); root.addView(create); }
+                categories();
+            }
             if (next.equals("pages") || next.equals("page")) root.addView(text("Static Pages preview • scripts, source actions, links and external resources disabled. Inline styles and embedded images only.", 12, MUTED));
             ScrollView scroll = new ScrollView(this); content = column(); scroll.addView(content); root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-            root.addView(button("Refresh", () -> refresh(true)));
+            LinearLayout footer=new LinearLayout(this);footer.setGravity(Gravity.CENTER_VERTICAL);TextView privacy=text(next.equals("sessions")?"Only chats granted to this device":"Private workspace",11,MUTED);footer.addView(privacy,new LinearLayout.LayoutParams(0,-2,1));footer.addView(button("Refresh",()->refresh(true)));root.addView(footer);
         }
         if (resumed) refresh(false);
     }
@@ -225,14 +244,15 @@ public final class MainActivity extends Activity {
             JSONObject s = data.optJSONObject("session"); if (s == null) { connection.setText("Invalid session response"); return; }
             processing = s.optBoolean("isProcessing"); permissionMode = s.optString("permissionMode");
             send.setEnabled(canSend() && !mutating);
-            updateText(detailMeta, sessionLabel(s) + (s.optString("permissionMode").isEmpty() ? "" : " · " + s.optString("permissionMode"))
-                + (processing ? "\nRefreshing snapshots every 2 seconds (not token streaming)." : "")
-                + (chatAllowed() && !canSend() ? "\nMessaging this Puck needs the existing-permissions grant on desktop." : ""));
+            updateText(detailMeta, s.optString("name",selected));
+            detailMeta.setContentDescription(s.optString("name",selected)+". "+s.optString("permissionMode")+" mode");
+            connection.setText("Connected · "+(permissionMode.isEmpty()?"Session":permissionMode)+" mode · "+(chatAllowed()?"Chat enabled":"Read-only"));
+            if(chatAllowed()&&!canSend()) connection.setText("Messaging needs the existing-permissions grant on desktop.");
             JSONArray list = data.optJSONArray("messages"); if (list == null) list = new JSONArray();
             String assistantKey=""; for(int i=0;i<list.length();i++){JSONObject m=list.optJSONObject(i);if(m!=null&&"assistant".equals(m.optString("role")))assistantKey=m.optString("id")+":"+m.optString("content");}
             if (awaitingReply && !processing && !assistantKey.isEmpty() && !assistantKey.equals(acceptedAssistantKey)) { awaitingReply=false; lastActivity="Reply received"; }
             else if(wasProcessing && !processing && !awaitingReply) lastActivity="Work stopped • check latest reply";
-            updateText(activity, mutating ? "Sending once…" : processing ? "● Working • refreshing" : awaitingReply ? "Accepted • waiting for reply" : lastActivity.isEmpty() ? "Ready" : lastActivity);
+            updateText(activity, mutating ? "Sending once…" : processing ? "● Working · snapshots every 2s, not streaming" : awaitingReply ? "Accepted • waiting for reply" : lastActivity.isEmpty() ? "Ready" : lastActivity);
             wasProcessing=processing;
             updateText(historyNotice, data.optBoolean("truncated") ? "Recent 100 messages • older history available on desktop" : list.length()==0 ? "No messages yet. Say hello below." : "");
             if(chatModel.update(list)) {
@@ -300,12 +320,16 @@ public final class MainActivity extends Activity {
         Collections.sort(items,(a,b)->{if(ChatModel.primary(a)!=ChatModel.primary(b))return ChatModel.primary(a)?-1:1;return Long.compare(b.optLong("lastMessageAt"),a.optLong("lastMessageAt"));});
         content.removeAllViews();
         if(items.isEmpty())content.addView(text(category.equals("Pucks")?"No Pucks visible in this grant. Check device access on desktop, or choose another section from ☰.":"No matching chats.",16,MUTED));
-        for(JSONObject item:items){String id=item.optString("id"); LinearLayout row=column();row.setPadding(dp(12),dp(10),dp(12),dp(10));
-            GradientDrawable bg=new GradientDrawable();bg.setColor(Color.WHITE);bg.setCornerRadius(dp(14));row.setBackground(bg);
-            TextView title=text((ChatModel.primary(item)?"★  ":"")+item.optString("name",id),18,INK);title.setTypeface(null,Typeface.BOLD);row.addView(title);
-            row.addView(text(item.optBoolean("isProcessing")?"● Working":"Open conversation  ›",13,MUTED));
-            row.setContentDescription(title.getText()+". "+(item.optBoolean("isProcessing")?"Working":"Open chat"));row.setFocusable(true);row.setOnClickListener(v->shell("chat",id));
-            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.setMargins(0,dp(4),0,dp(4));content.addView(row,lp);
+        if(category.equals("Pucks")&&!items.isEmpty()) {TextView label=text("YOUR PUCKS",11,GREEN);label.setLetterSpacing(.12f);label.setTypeface(null,Typeface.BOLD);content.addView(label);}
+        for(JSONObject item:items){String id=item.optString("id");boolean primary=ChatModel.primary(item);boolean busy=item.optBoolean("isProcessing");
+            LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(2),dp(14),dp(2),dp(14));row.setMinimumHeight(dp(92));
+            String name=item.optString("name",id);
+            TextView avatar=text(name.isEmpty()?"P":name.substring(0,1).toUpperCase(java.util.Locale.ROOT),23,primary?GREEN:MUTED);avatar.setGravity(Gravity.CENTER);avatar.setTypeface(null,Typeface.BOLD);avatar.setPadding(0,0,0,0);avatar.setBackground(shape(primary?Color.rgb(218,241,227):Color.rgb(236,240,237),30));row.addView(avatar,new LinearLayout.LayoutParams(dp(56),dp(56)));
+            LinearLayout copy=column();copy.setPadding(dp(15),0,dp(8),0);TextView title=text(name,18,INK);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));title.setMaxLines(2);title.setEllipsize(android.text.TextUtils.TruncateAt.END);copy.addView(title);
+            TextView summary=text(busy?"Working on your request…":primary?"Your Puck · open conversation":"Open conversation",14,busy?GREEN:MUTED);summary.setPadding(0,dp(2),0,dp(2));copy.addView(summary);row.addView(copy,new LinearLayout.LayoutParams(0,-2,1));
+            TextView trailing=text(busy?"●":primary?"Pinned":"›",primary?11:18,busy?GREEN:MUTED);row.addView(trailing);
+            row.setContentDescription(name+". "+(primary?"Pinned primary Puck. ":"")+(busy?"Working":"Open chat"));row.setFocusable(true);row.setClickable(true);android.util.TypedValue ripple=new android.util.TypedValue();getTheme().resolveAttribute(android.R.attr.selectableItemBackground,ripple,true);row.setBackgroundResource(ripple.resourceId);row.setOnClickListener(v->shell("chat",id));content.addView(row,new LinearLayout.LayoutParams(-1,-2));
+            View divider=new View(this);divider.setBackgroundColor(Color.rgb(237,241,238));LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,dp(1));line.setMargins(dp(72),0,0,0);content.addView(divider,line);
         }
     }
     private final class ChatAdapter extends BaseAdapter {
@@ -314,11 +338,11 @@ public final class MainActivity extends Activity {
         public int getCount(){return chatModel.rows.size();} public Object getItem(int n){return chatModel.rows.get(n);} public long getItemId(int n){return chatModel.rows.get(n).stableId;} public boolean hasStableIds(){return true;}
         public View getView(int n,View recycled,ViewGroup parent){
             LinearLayout wrapper; LinearLayout bubble; TextView body,meta;
-            if(recycled==null){wrapper=new LinearLayout(MainActivity.this); wrapper.setPadding(0,dp(4),0,dp(4));bubble=column();bubble.setPadding(dp(14),dp(6),dp(14),dp(8));body=text("",17,INK);body.setTextIsSelectable(true);meta=text("",11,MUTED);bubble.addView(body);bubble.addView(meta);wrapper.addView(bubble,new LinearLayout.LayoutParams(-2,-2));wrapper.setTag(new Object[]{bubble,body,meta,null});}
+            if(recycled==null){wrapper=new LinearLayout(MainActivity.this); wrapper.setPadding(0,dp(4),0,dp(4));bubble=column();bubble.setPadding(dp(14),dp(6),dp(14),dp(8));body=text("",16,INK);body.setLineSpacing(dp(3),1f);body.setTextIsSelectable(true);meta=text("",11,MUTED);meta.setGravity(Gravity.RIGHT);meta.setPadding(0,dp(4),0,0);bubble.addView(body);bubble.addView(meta);wrapper.addView(bubble,new LinearLayout.LayoutParams(-2,-2));wrapper.setTag(new Object[]{bubble,body,meta,null});}
             else wrapper=(LinearLayout)recycled;
             Object[] holder=(Object[])wrapper.getTag();bubble=(LinearLayout)holder[0];body=(TextView)holder[1];meta=(TextView)holder[2];ChatModel.Row row=chatModel.rows.get(n);
-            if(holder[3]!=row){boolean user="user".equals(row.role);wrapper.setGravity(user?Gravity.RIGHT:Gravity.LEFT);wrapper.setPadding(user?dp(34):0,dp(4),user?0:dp(24),dp(4));
-                GradientDrawable bg=new GradientDrawable();bg.setColor(user?Color.rgb(218,242,226):Color.WHITE);bg.setCornerRadius(dp(16));bubble.setBackground(bg);
+            if(holder[3]!=row){boolean user="user".equals(row.role);wrapper.setGravity(user?Gravity.RIGHT:Gravity.LEFT);wrapper.setPadding(user?dp(34):0,dp(6),user?0:dp(24),dp(6));
+                GradientDrawable bg=new GradientDrawable();bg.setColor(user?Color.rgb(216,247,220):Color.WHITE);bg.setCornerRadii(new float[]{dp(16),dp(16),dp(user?4:16),dp(user?4:16),dp(16),dp(16),dp(user?16:4),dp(user?16:4)});bubble.setBackground(bg);
                 body.setText(row.content);meta.setText((user?"You":"Puck")+(row.timestamp>0?" · "+DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(row.timestamp)):""));holder[3]=row;}
             return wrapper;
         }

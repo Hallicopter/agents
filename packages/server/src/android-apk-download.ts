@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 // Deliberately one reviewed, credential-free artifact, not a static-file server.
 export const ANDROID_APK_ROUTE = '/downloads/scoville-agents-debug.apk'
-export const ANDROID_APK_SHA256 = 'b2c5df8299d746d774026d1886d9598dc75ec0bb8ae729ff7a575bb60d3c7d16'
+export const ANDROID_APK_SHA256 = '38e206e029db5e18856ce7ec6da218c84aa9601c2d1c261a99a1ed2025643f11'
 export const ANDROID_APK_SIZE = 37267
 const HOST = 'vps.sturgeon-dab.ts.net:9100'
 
