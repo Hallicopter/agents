@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'bun:test'
+import { EventEmitter } from 'node:events'
+import { Writable } from 'node:stream'
 import { PiAgent } from '../pi-agent.ts'
 import type { BackendConfig } from '../backend/types.ts'
 import { AbortReason } from '../core/session-lifecycle.ts'
@@ -147,4 +149,41 @@ describe('PiAgent recovery state on abort', () => {
 
     agent.destroy()
   })
+})
+
+it('contains asynchronous stdin EPIPE without an unhandled stream error', async () => {
+  const agent: any = new PiAgent(createConfig())
+  const events: any[] = []
+  let completed = 0
+  agent.eventQueue.enqueue = (event: any) => events.push(event)
+  agent.eventQueue.complete = () => { completed++ }
+  const child: any = new EventEmitter()
+  child.stdin = new Writable({ write(_chunk, _encoding, callback) { callback(Object.assign(new Error('broken pipe'), {code:'EPIPE'})) } })
+  agent.subprocess = child
+  agent.attachSubprocessErrorHandlers(child)
+  agent.send({type:'prompt', message:'test'})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  child.emit('error', new Error('same child failed'))
+  expect(events).toHaveLength(1)
+  expect(events[0].message).toContain('broken pipe')
+  expect(completed).toBe(1)
+  agent.subprocess = null
+  agent.destroy()
+})
+it('ignores a retired stdin error and contains synchronous write failure', () => {
+  const agent: any = new PiAgent(createConfig())
+  const events: any[] = []
+  agent.eventQueue.enqueue = (event: any) => events.push(event)
+  agent.eventQueue.complete = () => {}
+  const old: any = new EventEmitter(); old.stdin = new EventEmitter()
+  agent.attachSubprocessErrorHandlers(old)
+  const current: any = new EventEmitter()
+  current.stdin = { writable: true, write() { throw new Error('closed pipe') } }
+  agent.subprocess = current
+  old.stdin.emit('error', new Error('old pipe'))
+  expect(events).toHaveLength(0)
+  expect(() => agent.send({type:'prompt'})).not.toThrow()
+  expect(events).toHaveLength(1)
+  agent.subprocess = null
+  agent.destroy()
 })

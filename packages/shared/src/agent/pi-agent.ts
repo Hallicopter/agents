@@ -175,6 +175,7 @@ export class PiAgent extends BaseAgent {
 
   // Subprocess process handle
   private subprocess: ChildProcess | null = null;
+  private readonly failedSubprocesses = new WeakSet<ChildProcess>();
   private readline: ReadlineInterface | null = null;
   private subprocessReady: Promise<void> | null = null;
   private subprocessReadyResolve: (() => void) | null = null;
@@ -560,12 +561,7 @@ export class PiAgent extends BaseAgent {
       this.handleSubprocessExit(code, signal);
     });
 
-    child.on('error', (error) => {
-      this.debug(`Subprocess error: ${error.message}`);
-      this.resetSubprocessErrorDedup();
-      this.eventQueue.enqueue({ type: 'error', message: `Pi subprocess error: ${error.message}` });
-      this.eventQueue.complete();
-    });
+    this.attachSubprocessErrorHandlers(child);
 
     const sessionPath = this.config.session
       ? getSessionPath(this.config.workspace.rootPath, sessionId)
@@ -925,13 +921,30 @@ export class PiAgent extends BaseAgent {
   /**
    * Send a JSONL command to the subprocess stdin.
    */
+  private attachSubprocessErrorHandlers(child: ChildProcess): void {
+    child.on('error', error => this.reportSubprocessError(child, error));
+    // Writable streams emit their own error event; child.on('error') does not catch EPIPE.
+    child.stdin?.on('error', error => this.reportSubprocessError(child, error));
+  }
+
+  private reportSubprocessError(child: ChildProcess, error: Error): void {
+    if (this.subprocess !== child || this.failedSubprocesses.has(child)) return;
+    this.failedSubprocesses.add(child);
+    this.debug(`Subprocess error: ${error.message}`);
+    this.resetSubprocessErrorDedup();
+    this.eventQueue.enqueue({ type: 'error', message: `Pi subprocess error: ${error.message}` });
+    this.eventQueue.complete();
+  }
+
   private send(cmd: Record<string, unknown>): void {
-    if (!this.subprocess?.stdin?.writable) {
+    const child = this.subprocess;
+    if (!child?.stdin?.writable) {
       this.debug('Cannot send to subprocess: stdin not writable');
       return;
     }
     const line = JSON.stringify(cmd);
-    this.subprocess.stdin.write(line + '\n');
+    try { child.stdin.write(line + '\n'); }
+    catch (error) { this.reportSubprocessError(child, error instanceof Error ? error : new Error('Subprocess write failed')); }
   }
 
   /**
