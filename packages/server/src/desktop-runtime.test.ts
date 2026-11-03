@@ -34,7 +34,7 @@ test('deployment requires exact explicit entitlement, session membership and Ori
     await expect(issue()).rejects.toThrow()
   } finally { f.close() }
 })
-for (const method of ['cancelProcessing', 'deleteSession'] as const) test(`${method} revokes session permanently within process`, async () => {
+for (const method of ['deleteSession'] as const) test(`${method} revokes session permanently within process`, async () => {
   const f = fixture()
   try {
     await f.runtime.gateway.issueRpcGrant(ctx, 's', renderer, () => true)
@@ -87,7 +87,7 @@ for (const change of ['remove', 'journal', 'expiry'] as const) test(`post-await 
 test('revocation survives runtime recreation', async () => {
   const f = fixture()
   try {
-    await f.manager.cancelProcessing('s')
+    await f.manager.deleteSession('s')
     f.runtime.dispose()
     const next = createDesktopRuntime(f.path)!
     next.bind(f.manager)
@@ -143,7 +143,7 @@ test('persistent access remains scoped and explicitly revocable without calendar
     f.save()
     expect((await f.runtime.gateway.issueRpcGrant(ctx, 's', renderer, () => true)).mode).toBe('watch')
     await expect(f.runtime.gateway.issueRpcGrant(ctx, 'foreign', renderer, () => true)).rejects.toThrow()
-    await f.manager.cancelProcessing('s')
+    await f.manager.deleteSession('s')
     await expect(f.runtime.gateway.issueRpcGrant(ctx, 's', renderer, () => true)).rejects.toThrow()
   } finally { f.close() }
 })
@@ -154,4 +154,14 @@ test('persistent entitlement supplies only a bounded per-connection control dead
   expect(Number.isNaN(desktopEntitlementDeadline(undefined as any))).toBe(true)
   expect(Number.isNaN(desktopEntitlementDeadline('invalid'))).toBe(true)
   expect(desktopEntitlementDeadline('2000-01-01T00:00:00Z')).toBeLessThan(now)
+})
+
+test('stopping chat allows a new explicit desktop connection without permanent revocation', async () => {
+  const f = fixture()
+  try {
+    await f.runtime.gateway.issueRpcGrant(ctx, 's', renderer, () => true)
+    await f.manager.cancelProcessing('s')
+    expect(f.calls.cancelProcessing).toBe(1)
+    expect((await f.runtime.gateway.issueRpcGrant(ctx, 's', renderer, () => true)).mode).toBe('watch')
+  } finally { f.close() }
 })

@@ -148,7 +148,11 @@ export function createDesktopRuntime(path: string | undefined) {
       manager = sm
       const cancel = sm.cancelProcessing.bind(sm)
       const remove = sm.deleteSession.bind(sm)
-      sm.cancelProcessing = async (...args) => { revokeSession(args[0]); return cancel(...args) }
+      sm.cancelProcessing = async (...args) => {
+        // Stop current viewers/grants; an explicit reopen may request fresh access.
+        for (const scope of seen.values()) if (scope.sessionId === args[0]) gateway.revoke(scope)
+        return cancel(...args)
+      }
       sm.deleteSession = async (...args) => { revokeSession(args[0]); return remove(...args) }
     },
     async dispose() { watcher?.close(); watcher = undefined; gateway.dispose(); await controlRuntime?.dispose() },

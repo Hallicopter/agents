@@ -193,3 +193,7 @@ only temporary dummy strings under `/run/credentials`, never real secrets.
 The original 128-rectangle framebuffer bound rejected normal tiled updates during scrolling, disconnected Control, and quarantined input after input had been accepted. The parser now accepts up to 4096 rectangles while retaining the 16 MiB frame bound and strict Raw-only decoding. Fragmented 600-tile updates and a subsequent release Fence are covered by regression tests.
 
 Input-drain confirmation uses bounded nested timeouts (5 seconds in the container, 6 seconds for the host helper, 8 seconds for transport confirmation) so brief scheduling delays do not trip the earlier 1-second helper limit. Successful confirmation is still mandatory; uncertainty still quarantines input. Failure logs identify the release stage.
+
+## v0.15.8 session-stop behavior
+
+Stopping a chat closes its current desktop viewers and invalidates outstanding or in-flight RPC grants. It no longer permanently revokes the session’s desktop permission: the user can explicitly reopen Desktop afterward. Deleting a session still persists revocation. Previously recorded Jolokia stop revocations require an explicit operator reauthorization; other revocations remain intact.

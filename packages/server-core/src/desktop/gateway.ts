@@ -102,14 +102,18 @@ export class DesktopGateway {
       return Response.json({ token }, { headers: { 'Cache-Control': 'no-store' } })
     } catch { return unavailable() }
   }
+  private readonly revocationVersions = new Map<string, number>()
+
   async issueRpcGrant(context: RequestContext, sessionId: string, origin: string, connected: () => boolean, mode: DesktopMode = 'watch'): Promise<{ token: string; url: string; mode: DesktopMode; expiresAt: number; controlAvailable: boolean }> {
     if ((mode !== 'watch' && mode !== 'control') || (mode === 'control' && !this.options.control)) throw new Error('Control unavailable — desktop is busy or control is not enabled.')
     if (!context.workspaceId || typeof origin !== 'string' || typeof sessionId !== 'string' || !sessionId || sessionId.length > 200 ||
         (origin !== this.options.origin && origin !== this.options.rpcOrigin && (!this.options.electronOrigin || origin !== this.options.electronOrigin))) throw new Error('Desktop unavailable')
     const scope = Object.freeze({ workspaceId: context.workspaceId, sessionId })
-    const validate = async () => connected() && !!await boundedAuthorization(async () =>
+    const generation = this.revocationVersions.get(JSON.stringify(scope)) ?? 0
+    const current = () => generation === (this.revocationVersions.get(JSON.stringify(scope)) ?? 0)
+    const validate = async () => current() && connected() && !!await boundedAuthorization(async () =>
       !!await this.options.authorizeRpc?.(context, scope) &&
-      (mode === 'watch' || !!await this.options.control!.authorizeRpc(context, scope))) && connected()
+      (mode === 'watch' || !!await this.options.control!.authorizeRpc(context, scope))) && connected() && current()
     if (!await validate() || this.disposed) throw new Error('Desktop unavailable')
     for (const [key, grant] of this.grants) if (grant.expires <= Date.now()) this.grants.delete(key)
     if (this.grants.size >= 16) throw new Error('Desktop unavailable')
@@ -118,7 +122,7 @@ export class DesktopGateway {
       // Capability is a bounded scope authorization hint, NOT a lease/busy promise.
       try { controlAvailable = !!await boundedAuthorization(() => this.options.control!.authorizeRpc(context, scope)) }
       catch { controlAvailable = false }
-      if (!connected() || this.disposed) throw new Error('Desktop unavailable')
+      if (!current() || !connected() || this.disposed) throw new Error('Desktop unavailable')
     }
     const token = randomBytes(32).toString('base64url')
     const expiresAt = mode === 'control' ? Math.min(this.options.control!.entitlementExpiresAt(scope), Date.now() + 5 * 60_000) : Date.now() + 5 * 60_000
@@ -162,6 +166,8 @@ export class DesktopGateway {
     })
   }
   revoke(scope: DesktopScope): void {
+    const key = JSON.stringify({ workspaceId: scope.workspaceId, sessionId: scope.sessionId })
+    this.revocationVersions.set(key, (this.revocationVersions.get(key) ?? 0) + 1)
     for (const [key, grant] of this.grants) if (sameScope(scope, grant.scope)) this.grants.delete(key)
     for (const [ws, active] of this.viewers) if (active && sameScope(scope, active)) ws.terminate()
   }

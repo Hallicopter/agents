@@ -220,3 +220,17 @@ test('authenticated RPC bridge binds grant to connected workspace; disconnect re
     viewer.send(JSON.stringify({ token: reply.result.token })); await rejected
   } finally { client.terminate(); server.close() }
 }, 10_000)
+
+test('revocation rejects a grant being authorized when the session stops', async () => {
+  let release!: () => void, entered!: () => void
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const gateway = new DesktopGateway({ ...options(), authorizeRpc: async () => { entered(); await waiting; return true } })
+  try {
+    const pending = gateway.issueRpcGrant({workspaceId:scope.workspaceId,clientId:'client',webContentsId:null}, scope.sessionId, origin, () => true)
+    await started
+    gateway.revoke(scope)
+    release()
+    await expect(pending).rejects.toThrow()
+  } finally { release(); gateway.dispose() }
+})
