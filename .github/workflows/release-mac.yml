@@ -50,6 +50,7 @@ jobs:
           done
       - name: Build Apple Silicon app
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/') && secrets.CSC_LINK || '' }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ startsWith(github.ref, 'refs/tags/') && secrets.APPLE_ID || '' }}
