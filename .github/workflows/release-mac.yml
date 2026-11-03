@@ -3,6 +3,11 @@ name: Scoville Mac release
 on:
   workflow_dispatch:
     inputs:
+      runner:
+        description: Apple Silicon runner image
+        type: choice
+        default: macos-15
+        options: [macos-15, macos-14, macos-26]
       publish_preview:
         description: Publish an ad-hoc signed preview for manual installation
         type: boolean
@@ -14,12 +19,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: scoville-mac-${{ github.ref }}
+  group: scoville-mac-${{ github.ref }}-${{ inputs.runner || 'macos-15' }}
   cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
