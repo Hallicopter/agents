@@ -10,7 +10,7 @@
 
 ## Hallicopter fork
 
-This is [Hallicopter/agents](https://github.com/Hallicopter/agents), a maintained fork of [Craft Agents](https://github.com/lukilabs/craft-agents-oss). The current upstream baseline is **v0.15.6** (`8df01c5d`). Upstream history and documentation are retained below.
+This is [Hallicopter/agents](https://github.com/Hallicopter/agents), a maintained fork of [Craft Agents](https://github.com/lukilabs/craft-agents-oss). The current upstream baseline is **v0.15.8** (`1627c43e`). Upstream history and documentation are retained below.
 
 ### Install and update Scoville
 
