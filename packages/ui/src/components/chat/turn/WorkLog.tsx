@@ -15,6 +15,10 @@ import { useRowReveal } from './use-row-reveal'
 import type { WorkLogPreview } from './work-log-summary'
 
 export interface WorkLogHeaderProps {
+  /** Optional provenance lead for incoming messages, using the same activity disclosure. */
+  lead?: string
+  /** Connect the toggle to its expanded content. */
+  contentId?: string
   /** Number of activities in the turn (the former step-count pill, now the summary lead) */
   activityCount: number
   preview: WorkLogPreview
@@ -38,11 +42,13 @@ export function WorkLogHeader({
   isExpanded,
   onToggle,
   actionsMenu,
+  lead: customLead,
+  contentId,
 }: WorkLogHeaderProps) {
   const { t } = useTranslation()
-  const lead = preview.text === undefined
+  const lead = customLead ?? (preview.text === undefined
     ? t('turnCard.stepsCompletedCount', { count: activityCount })
-    : t('turnCard.stepCount', { count: activityCount })
+    : t('turnCard.stepCount', { count: activityCount }))
 
   return (
     <div className="group/wl flex min-w-0 items-center gap-1">
@@ -50,6 +56,7 @@ export function WorkLogHeader({
         type="button"
         onClick={onToggle}
         aria-expanded={isExpanded}
+        aria-controls={contentId}
         className="flex min-h-7 in-data-compact:min-h-9 min-w-0 flex-1 -ml-1.5 items-center gap-2 rounded-md py-0.5 pl-1.5 pr-2 text-left text-label text-secondary transition-colors duration-micro ease-out-subtle hover:bg-fill-hover hover:duration-instant active:bg-fill-pressed"
       >
         <motion.span
@@ -175,26 +182,42 @@ function WorkLogRows({
  * first rows fade in with a 25ms stagger; closing fades the rows out quickly.
  * Excluded from transcript search (matches ripgrep behavior).
  */
-export function WorkLog({ todos, ...props }: WorkLogProps) {
-  const { activityCount, preview, failedCount, isExpanded, onToggle, actionsMenu, ...rowProps } = props
+/** Shared disclosure for thinking/tool work logs and incoming agent messages.
+ * Keep the real header, keyboard behavior and expansion animation in one place.
+ * Incoming messages are transcript content, so only WorkLog opts out of search.
+ */
+export function WorkLogDisclosure({ children, contentId, ...header }: WorkLogHeaderProps & { children: React.ReactNode }) {
   return (
-    <div className="group min-w-0 select-none" data-search-exclude="true">
-      <WorkLogHeader
+    <div className="group min-w-0">
+      <WorkLogHeader {...header} contentId={contentId} />
+      <AnimatePresence initial={false}>
+        {header.isExpanded && (
+          <motion.div id={contentId} key="work-log-body" exit={{ opacity: 0, transition: TWEEN.exit }}>
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+export function WorkLog({ todos, ...props }: WorkLogProps) {
+  const { activityCount, preview, failedCount, isExpanded, onToggle, actionsMenu, lead, contentId, ...rowProps } = props
+  return (
+    <div className="select-none" data-search-exclude="true">
+      <WorkLogDisclosure
         activityCount={activityCount}
         preview={preview}
         failedCount={failedCount}
         isExpanded={isExpanded}
         onToggle={onToggle}
         actionsMenu={actionsMenu}
-      />
-      <AnimatePresence initial={false}>
-        {isExpanded && (
-          <motion.div key="work-log-body" exit={{ opacity: 0, transition: TWEEN.exit }}>
-            <WorkLogRows {...rowProps} />
-            {todos && todos.length > 0 && <TodoList todos={todos} animateInserts={rowProps.animateInserts} />}
-          </motion.div>
-        )}
-      </AnimatePresence>
+        lead={lead}
+        contentId={contentId}
+      >
+        <WorkLogRows {...rowProps} />
+        {todos && todos.length > 0 && <TodoList todos={todos} animateInserts={rowProps.animateInserts} />}
+      </WorkLogDisclosure>
     </div>
   )
 }

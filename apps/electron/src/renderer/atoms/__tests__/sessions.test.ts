@@ -263,3 +263,22 @@ describe('refreshSessionsMetadataAtom', () => {
     expect(store.get(sessionIdsAtom)).toHaveLength(2)
   })
 })
+
+
+describe('session label assignment hydration', () => {
+  it('hydrates labels/status/counts from metadata and keeps messages through reconnect refresh', () => {
+    const store = createStore()
+    const original = makeSession({ id: 'label-hydration', labels: ['puck'], sessionStatus: 'todo', messages: [msg('raw')] })
+    store.set(initializeSessionsAtom, [original])
+    store.set(loadedSessionsAtom, new Set([original.id]))
+    expect(store.get(sessionMetaMapAtom).get(original.id)?.labels).toEqual(['puck'])
+    store.set(refreshSessionsMetadataAtom, {
+      sessions: [makeSession({ id: original.id, labels: ['puck-subagent'], sessionStatus: 'needs-review', messages: [] })],
+      loadedSessionIds: new Set([original.id]), removeMissing: false,
+    })
+    expect(store.get(sessionMetaMapAtom).size).toBe(1)
+    expect(store.get(sessionMetaMapAtom).get(original.id)?.labels).toEqual(['puck-subagent'])
+    expect(store.get(sessionMetaMapAtom).get(original.id)?.sessionStatus).toBe('needs-review')
+    expect(store.get(sessionAtomFamily(original.id))?.messages[0]?.content).toBe('content:raw')
+  })
+})

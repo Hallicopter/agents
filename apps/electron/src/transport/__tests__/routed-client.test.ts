@@ -271,3 +271,51 @@ describe('isLocalOnly consistency', () => {
     expect(isLocalOnly(REMOTE_CHANNEL)).toBe(false)
   })
 })
+
+describe('remote workspace metadata identity', () => {
+  const emit = (client: WsRpcClient, channel: string, ...args: any[]) => {
+    for (const fn of (client as any)._listeners.get(channel) ?? []) fn(...args)
+  }
+  it('round-trips label/status workspace ids, leaving unrelated payloads untouched', async () => {
+    const local = stubClient(), remote = stubClient()
+    const routed = new RoutedClient(local, remote)
+    routed.setWorkspaceMapping('mac-local', 'server-remote')
+    await routed.invoke(RPC_CHANNELS.labels.LIST, 'mac-local')
+    expect(remote.invoke).toHaveBeenCalledWith(RPC_CHANNELS.labels.LIST, 'server-remote')
+    for (const channel of [RPC_CHANNELS.labels.CHANGED, RPC_CHANNELS.statuses.CHANGED]) {
+      const cb = mock(() => {})
+      const unsub = routed.on(channel, cb)
+      emit(remote, channel, 'server-remote')
+      expect(cb).toHaveBeenLastCalledWith('mac-local')
+      emit(remote, channel, 'other-workspace')
+      expect(cb).toHaveBeenLastCalledWith('other-workspace')
+      unsub()
+      emit(remote, channel, 'server-remote')
+      expect(cb).toHaveBeenCalledTimes(2)
+    }
+    const sessionEvent = mock(() => {})
+    routed.on(REMOTE_CHANNEL, sessionEvent)
+    const payload = { workspaceId: 'server-remote', labels: ['server-remote'] }
+    emit(remote, REMOTE_CHANNEL, payload)
+    expect(sessionEvent).toHaveBeenCalledWith(payload)
+    expect(payload.workspaceId).toBe('server-remote')
+  })
+  it('keeps translations through client swaps and clears them for local workspaces', async () => {
+    const local = stubClient({ invoke: mock(async () => ({ workspaceId: 'mac-b', remoteServer: { url: 'ws://fixture', token: 'fixture', remoteWorkspaceId: 'server-b' } })) })
+    const remoteA = stubClient(), remoteB = stubClient()
+    const routed = new RoutedClient(local, remoteA)
+    routed.setWorkspaceMapping('mac-a', 'server-a')
+    routed.setClientFactory(() => remoteB)
+    const cb = mock(() => {})
+    routed.on(RPC_CHANNELS.labels.CHANGED, cb)
+    emit(remoteA, RPC_CHANNELS.labels.CHANGED, 'server-a')
+    expect(cb).toHaveBeenLastCalledWith('mac-a')
+    await routed.invoke(SWITCH_CHANNEL, 'mac-b')
+    emit(remoteB, RPC_CHANNELS.labels.CHANGED, 'server-b')
+    expect(cb).toHaveBeenLastCalledWith('mac-b')
+    expect((remoteA as any)._listeners.get(RPC_CHANNELS.labels.CHANGED)?.size).toBe(0)
+    routed.clearWorkspaceMapping()
+    emit(remoteB, RPC_CHANNELS.labels.CHANGED, 'server-b')
+    expect(cb).toHaveBeenLastCalledWith('server-b')
+  })
+})

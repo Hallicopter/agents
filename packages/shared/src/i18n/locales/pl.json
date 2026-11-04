@@ -255,6 +255,7 @@
   "chat.hideTechnicalDetails": "Ukryj szczegóły techniczne",
   "chat.imageWarning.action": "Włącz obsługę obrazów",
   "chat.imageWarning.title": "{{modelName}} jest skonfigurowany jako wyłącznie tekstowy. Obrazy zostaną usunięte przed wysłaniem.",
+  "chat.incomingAgentMessage": "Wiadomość agenta od {{name}}",
   "chat.inputFailedDescription": "Reszta tego czatu jest nadal dostępna. Możesz spróbować ponownie albo wyczyścić lokalny szkic, jeśli został uszkodzony.",
   "chat.inputFailedTitle": "Nie udało się załadować pola wejściowego",
   "chat.learnMore": "Dowiedz się więcej",

@@ -251,6 +251,7 @@
   "chat.hideTechnicalDetails": "隐藏技术详情",
   "chat.imageWarning.action": "启用图像支持",
   "chat.imageWarning.title": "{{modelName}} 配置为纯文本模型，图像将在发送前被移除。",
+  "chat.incomingAgentMessage": "来自 {{name}} 的智能体消息",
   "chat.inputFailedDescription": "此聊天的其余部分仍可使用。你可以重试，或者在本地草稿损坏时将其清除。",
   "chat.inputFailedTitle": "输入区域加载失败",
   "chat.learnMore": "了解更多",

@@ -127,15 +127,28 @@ export class RoutedClient implements RpcClient {
       return this.localClient.on(channel, callback)
     }
 
-    // REMOTE_ELIGIBLE — subscribe on workspaceClient and track for re-subscription
-    const unsub = this.workspaceClient.on(channel, callback)
+    // These metadata events carry a workspace ID as their first argument.
+    // invoke() translates the request local -> remote; translate the notification
+    // back so renderer hooks scoped to the local workspace accept it. Never
+    // rewrite session/event payloads or arbitrary strings.
+    const isMetadataChange = channel === RPC_CHANNELS.labels.CHANGED || channel === RPC_CHANNELS.statuses.CHANGED
+    const routedCallback = isMetadataChange ? (...args: any[]) => {
+      const mapping = this.workspaceIdMapping
+      if (mapping && args[0] === mapping.remoteId) {
+        callback(mapping.localId, ...args.slice(1))
+      } else {
+        callback(...args)
+      }
+    } : callback
+    // Keep the wrapper in the registry so translation survives client swaps.
+    const unsub = this.workspaceClient.on(channel, routedCallback)
 
     let set = this.remoteListeners.get(channel)
     if (!set) {
       set = new Set()
       this.remoteListeners.set(channel, set)
     }
-    const entry: ListenerEntry = { callback, unsub }
+    const entry: ListenerEntry = { callback: routedCallback, unsub }
     set.add(entry)
 
     return () => {

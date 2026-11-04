@@ -1,20 +1,33 @@
-import type { ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import type { parseIncomingAgentEnvelope } from './incoming-agent-envelope'
+import { WorkLogDisclosure } from './turn/WorkLog'
+import { WORK_LOG_BODY } from './turn/turn-classes'
 
-/** Native details gives keyboard expansion without mutating transcript state. */
-export function IncomingAgentMessage({ envelope, label, children }: {
+/** The actual thinking/tool activity disclosure, not a nested user bubble.
+ * Local expansion is deliberately independent of changing/streaming content.
+ */
+export function IncomingAgentMessage({ envelope, label, children, actionsMenu }: {
   envelope: NonNullable<ReturnType<typeof parseIncomingAgentEnvelope>>
   label: string
   children: ReactNode
+  actionsMenu?: ReactNode
 }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const contentId = useId()
   return (
-    <details className="group/envelope">
-      <summary className="cursor-pointer rounded-sm text-label focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
-        <span className="break-all font-medium">{label}</span>
-        <span className="ml-1 text-tertiary break-all">({envelope.senderId})</span>
-        <span className="mt-1 block text-copy text-secondary group-open/envelope:hidden">{envelope.preview}</span>
-      </summary>
-      <div className="mt-2 border-t border-separator pt-2">{children}</div>
-    </details>
+    <WorkLogDisclosure
+      activityCount={1}
+      lead={label}
+      preview={{ text: envelope.senderId }}
+      failedCount={0}
+      isExpanded={isExpanded}
+      onToggle={() => setIsExpanded(open => !open)}
+      contentId={contentId}
+      actionsMenu={actionsMenu}
+    >
+      <div className={`${WORK_LOG_BODY} my-0.5 gap-2 select-text break-words text-copy text-foreground [&_p]:whitespace-pre-wrap`}>
+        {children}
+      </div>
+    </WorkLogDisclosure>
   )
 }

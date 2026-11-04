@@ -251,6 +251,7 @@
   "chat.hideTechnicalDetails": "Technikai részletek elrejtése",
   "chat.imageWarning.action": "Képtámogatás engedélyezése",
   "chat.imageWarning.title": "A(z) {{modelName}} csak szöveges modellként van beállítva. A képek küldés előtt eltávolításra kerülnek.",
+  "chat.incomingAgentMessage": "Ügynöküzenet innen: {{name}}",
   "chat.inputFailedDescription": "A beszélgetés többi része továbbra is elérhető. Megpróbálhatod újra, vagy törölheted a helyi piszkozatot, ha megsérült.",
   "chat.inputFailedTitle": "Nem sikerült betölteni a beviteli mezőt",
   "chat.learnMore": "Tudj meg többet",

@@ -251,6 +251,7 @@
   "chat.hideTechnicalDetails": "Ocultar detalles técnicos",
   "chat.imageWarning.action": "Habilitar soporte de imágenes",
   "chat.imageWarning.title": "{{modelName}} está configurado como solo texto. Las imágenes se eliminarán antes de enviar.",
+  "chat.incomingAgentMessage": "Mensaje de agente de {{name}}",
   "chat.inputFailedDescription": "El resto de este chat sigue disponible. Puedes reintentarlo o borrar el borrador local si se dañó.",
   "chat.inputFailedTitle": "No se pudo cargar la entrada",
   "chat.learnMore": "Más información",

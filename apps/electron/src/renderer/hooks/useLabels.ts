@@ -7,7 +7,8 @@
  * Auto-refreshes when workspace changes or label config changes.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useMemo } from 'react'
+import { useWorkspaceMetadata, type WorkspaceMetadataSource } from './useWorkspaceMetadata'
 import type { LabelConfig } from '@craft-agent/shared/labels'
 import { flattenLabels } from '@craft-agent/shared/labels'
 
@@ -27,58 +28,13 @@ export interface UseLabelsResult {
  * Auto-refreshes when workspaceId changes.
  * Subscribes to live label config changes via LABELS_CHANGED event.
  */
+const labelsSource: WorkspaceMetadataSource<LabelConfig> = {
+  load: workspaceId => window.electronAPI.listLabels(workspaceId),
+  subscribe: onChange => window.electronAPI.onLabelsChanged(onChange),
+}
+
 export function useLabels(workspaceId: string | null): UseLabelsResult {
-  const [labels, setLabels] = useState<LabelConfig[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  // Memoized flat version of the tree for lookups
+  const { data: labels, isLoading, error, refresh } = useWorkspaceMetadata(workspaceId, labelsSource)
   const flatLabels = useMemo(() => flattenLabels(labels), [labels])
-
-  const refresh = useCallback(async () => {
-    if (!workspaceId) {
-      setLabels([])
-      setIsLoading(false)
-      return
-    }
-
-    try {
-      setIsLoading(true)
-      const configs = await window.electronAPI.listLabels(workspaceId)
-      setLabels(configs)
-      setError(null)
-    } catch (err) {
-      console.error('[useLabels] Failed to load labels:', err)
-      setError(err instanceof Error ? err.message : 'Failed to load labels')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [workspaceId])
-
-  // Load labels when workspace changes
-  useEffect(() => {
-    refresh()
-  }, [refresh])
-
-  // Subscribe to live label changes (config file changes)
-  useEffect(() => {
-    if (!workspaceId) return
-
-    const cleanup = window.electronAPI.onLabelsChanged((changedWorkspaceId) => {
-      // Only refresh if this is our workspace
-      if (changedWorkspaceId === workspaceId) {
-        refresh()
-      }
-    })
-
-    return cleanup
-  }, [workspaceId, refresh])
-
-  return {
-    labels,
-    flatLabels,
-    isLoading,
-    error,
-    refresh,
-  }
+  return { labels, flatLabels, isLoading, error, refresh }
 }

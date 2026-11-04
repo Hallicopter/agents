@@ -425,19 +425,18 @@ export function UserMessageBubble({
     displayContent = displayContent.trim()
   }
 
-  return (
-    <div className={cn("flex w-full flex-col items-end gap-2", className)}>
-      {/* Attachment preview row - stored attachments with thumbnails */}
-      {hasAttachments && (
+  const attachmentPreviews = (
+    hasAttachments && (
         <div className={cn("flex flex-wrap justify-end gap-2", maxWidth)}>
           {attachments!.map((att, i) => {
             const isImage = att.type === 'image'
             const hasThumbnail = !!att.thumbnailBase64
 
             return (
-              <div
+              <button
+                type="button"
                 key={att.id || i}
-                className="shrink-0 cursor-pointer transition-opacity duration-micro ease-out-subtle hover:opacity-80 hover:duration-instant"
+                className="shrink-0 cursor-pointer text-left transition-opacity duration-micro ease-out-subtle hover:opacity-80 hover:duration-instant"
                 onClick={() => att.storedPath && onFileClick?.(att.storedPath)}
                 title={t('chat.clickToOpen', { name: att.name })}
               >
@@ -480,11 +479,41 @@ export function UserMessageBubble({
                     </div>
                   </div>
                 )}
-              </div>
+              </button>
             )
           })}
         </div>
-      )}
+      )
+  )
+
+  // Transcript agent envelopes are activity rows, never ordinary user bubbles.
+  // Keep all attachments/body inside the disclosure; copy always uses the exact raw envelope.
+  if (envelope) {
+    return (
+      <div className={cn("w-full min-w-0", className)}>
+        <IncomingAgentMessage
+          envelope={envelope}
+          label={t('chat.incomingAgentMessage', { name: envelope.senderName })}
+          actionsMenu={
+            <TurnIconButton
+              aria-label={copied ? t('common.copied') : t('common.copy')}
+              tooltip
+              icon={copied ? <Check className="size-3.5 text-success" /> : <Copy />}
+              onClick={() => copy(content)}
+            />
+          }
+        >
+          {showQueued && <span role="status" className="text-caption text-tertiary">{t('chat.queuedBadge')}</span>}
+          {attachmentPreviews}
+          {renderContentWithBadges(content, [], onUrlClick, onFileClick)}
+        </IncomingAgentMessage>
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn("flex w-full flex-col items-end gap-2", className)}>
+      {attachmentPreviews}
 
       {/* Badges row - edit request badges above text bubble */}
       {hasEditRequestBadges && (
@@ -514,7 +543,7 @@ export function UserMessageBubble({
               aria-label={copied ? t('common.copied') : t('common.copy')}
               tooltip
               icon={copied ? <Check className="size-3.5 text-success" /> : <Copy />}
-              onClick={() => copy(envelope ? content : displayContent)}
+              onClick={() => copy(displayContent)}
               className="select-none"
             />
           </div>
@@ -530,15 +559,7 @@ export function UserMessageBubble({
               <span className="text-caption font-normal italic">{t('chat.queuedBadge')}</span>
             </div>
           )}
-          {envelope ? (
-            <IncomingAgentMessage
-              key={content}
-              envelope={envelope}
-              label={t('chat.incomingAgentMessage', { defaultValue: 'Agent message from {{name}}', name: envelope.senderName })}
-            >
-              {renderContentWithBadges(content, inlineBadges, onUrlClick, onFileClick)}
-            </IncomingAgentMessage>
-          ) : (hasInlineBadges
+          {hasInlineBadges
             ? renderContentWithBadges(displayContent, inlineBadges, onUrlClick, onFileClick)
             : (
               <Markdown
@@ -549,8 +570,8 @@ export function UserMessageBubble({
               >
                 {displayContent}
               </Markdown>
-            )
-          )}
+            )}
+
 
         </div>
       </div>

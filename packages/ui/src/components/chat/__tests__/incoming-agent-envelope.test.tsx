@@ -37,31 +37,39 @@ describe('incoming agent legacy display fallback', () => {
   })) {
     it(`does not collapse ${name}`, () => expect(parseIncomingAgentEnvelope(text)).toBeNull())
   }
-  it('bounds and escapes the preview, leaving the body untouched', () => {
+  it('retains the bounded parser preview but never renders a body excerpt', () => {
     const content = raw.replace('Ready for review.', '<script>' + 'x'.repeat(200))
     const envelope = parseIncomingAgentEnvelope(content)!
     expect(envelope.preview.length).toBe(120)
     const html = renderToStaticMarkup(<IncomingAgentMessage envelope={envelope} label="Agent message"><p>{content}</p></IncomingAgentMessage>)
-    expect(html).toContain('&lt;script&gt;')
-    expect(html).not.toContain('<script>')
+    expect(html).not.toContain('script')
+    expect(html).not.toContain('xxx')
     expect(content).toContain('x'.repeat(200))
   })
-  it('starts collapsed, with a native keyboard-operable summary and full expansion content', () => {
+  it('starts fully collapsed using the real keyboard-operable work-log header', () => {
     const html = renderToStaticMarkup(<IncomingAgentMessage envelope={parseIncomingAgentEnvelope(raw)!} label="Agent message from Ops"><p>{raw}</p><a href="/report">Report</a></IncomingAgentMessage>)
-    expect(html).toContain('<details')
-    expect(html).not.toMatch(/<details[^>]*\bopen[\s=>]/)
-    expect(html).toContain('<summary')
-    expect(html).toContain('Full details')
-    expect(html).toContain('href="/report"')
-    expect(html).toContain('group-open/envelope:hidden')
+    expect(html).toContain('<button')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('aria-controls=')
+    expect(html).toContain('group/wl')
+    expect(html).not.toContain('<details')
+    expect(html).not.toContain('Full details')
+    expect(html).not.toContain('href="/report"')
+    expect(html).not.toContain('bg-user-message-bubble')
   })
-  it('opts in only at transcript sites and preserves copy, badge offsets and attachments', () => {
+  it('uses one disclosure implementation for thinking activity and agent messages', () => {
+    const incoming = readFileSync(new URL('../IncomingAgentMessage.tsx', import.meta.url), 'utf8')
+    const workLog = readFileSync(new URL('../turn/WorkLog.tsx', import.meta.url), 'utf8')
+    expect(incoming).toContain('<WorkLogDisclosure')
+    expect(workLog).toContain('<WorkLogDisclosure')
+    expect(incoming).not.toContain('envelope.preview')
+  })
+  it('opts in only at transcript sites and preserves raw copy and streaming expansion', () => {
     const bubble = readFileSync(new URL('../UserMessageBubble.tsx', import.meta.url), 'utf8')
     expect(bubble).toContain('collapseIncomingAgentMessages = false')
     expect(bubble).toContain('collapseIncomingAgentMessages ? parseIncomingAgentEnvelope(content) : null')
-    expect(bubble).toContain('copy(envelope ? content : displayContent)')
-    expect(bubble).toContain('renderContentWithBadges(content, inlineBadges, onUrlClick, onFileClick)')
-    expect(bubble.indexOf('attachments!.map')).toBeLessThan(bubble.indexOf('<IncomingAgentMessage'))
+    expect(bubble).toContain('copy(content)')
+    expect(bubble).not.toContain('key={content}')
     for (const file of ['../SessionViewer.tsx', '../../../../../../apps/electron/src/renderer/components/app-shell/chat-display/MessageBubble.tsx']) {
       expect(readFileSync(new URL(file, import.meta.url), 'utf8')).toContain('collapseIncomingAgentMessages')
     }

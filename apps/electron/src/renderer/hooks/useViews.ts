@@ -10,7 +10,8 @@
  * Re-compiles on LABELS_CHANGED events (views changes trigger same broadcast).
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
+import { useWorkspaceMetadata, type WorkspaceMetadataSource } from './useWorkspaceMetadata'
 import type { ViewConfig, CompiledView, ViewEvaluationContext } from '@craft-agent/shared/views'
 import { compileAllViews, evaluateViews, buildViewContext } from '@craft-agent/shared/views'
 import type { SessionMeta } from '../atoms/sessions'
@@ -35,45 +36,13 @@ export interface UseViewsResult {
  * Expressions are compiled once on load, then evaluated per-session per-render.
  * Subscribes to live changes via LABELS_CHANGED event (views trigger same broadcast).
  */
+const viewsSource: WorkspaceMetadataSource<ViewConfig> = {
+  load: workspaceId => window.electronAPI.listViews(workspaceId),
+  subscribe: onChange => window.electronAPI.onLabelsChanged(onChange),
+}
+
 export function useViews(workspaceId: string | null): UseViewsResult {
-  const [configs, setConfigs] = useState<ViewConfig[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-
-  const refresh = useCallback(async () => {
-    if (!workspaceId) {
-      setConfigs([])
-      setIsLoading(false)
-      return
-    }
-
-    try {
-      setIsLoading(true)
-      const views = await window.electronAPI.listViews(workspaceId)
-      setConfigs(views)
-    } catch (err) {
-      console.error('[useViews] Failed to load views:', err)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [workspaceId])
-
-  // Load on workspace change
-  useEffect(() => {
-    refresh()
-  }, [refresh])
-
-  // Subscribe to live changes (views changes trigger LABELS_CHANGED broadcast)
-  useEffect(() => {
-    if (!workspaceId) return
-
-    const cleanup = window.electronAPI.onLabelsChanged((changedWorkspaceId) => {
-      if (changedWorkspaceId === workspaceId) {
-        refresh()
-      }
-    })
-
-    return cleanup
-  }, [workspaceId, refresh])
+  const { data: configs, isLoading, refresh } = useWorkspaceMetadata(workspaceId, viewsSource)
 
   // Compile all expressions once when configs change.
   // This is the one-time parsing overhead — after this, evaluation is native speed.

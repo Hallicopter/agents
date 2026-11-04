@@ -251,6 +251,7 @@
   "chat.hideTechnicalDetails": "Technische Details ausblenden",
   "chat.imageWarning.action": "Bildunterstützung aktivieren",
   "chat.imageWarning.title": "{{modelName}} ist als reines Textmodell konfiguriert. Bilder werden vor dem Senden entfernt.",
+  "chat.incomingAgentMessage": "Agentennachricht von {{name}}",
   "chat.inputFailedDescription": "Der Rest dieses Chats ist weiterhin verfügbar. Du kannst es erneut versuchen oder den lokalen Entwurf löschen, falls er beschädigt wurde.",
   "chat.inputFailedTitle": "Der Eingabebereich konnte nicht geladen werden",
   "chat.learnMore": "Mehr erfahren",

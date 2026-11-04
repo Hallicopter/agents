@@ -251,6 +251,7 @@
   "chat.hideTechnicalDetails": "Hide technical details",
   "chat.imageWarning.action": "Enable image support",
   "chat.imageWarning.title": "{{modelName}} is configured as text-only. Images will be stripped before sending.",
+  "chat.incomingAgentMessage": "Agent message from {{name}}",
   "chat.inputFailedDescription": "The rest of this chat is still available. You can retry, or clear the local draft if it became corrupted.",
   "chat.inputFailedTitle": "The input failed to load",
   "chat.learnMore": "Learn More",

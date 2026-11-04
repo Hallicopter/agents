@@ -1,0 +1,7 @@
+# Incoming session envelopes
+
+`UserMessageBubble` opts into strict envelope recognition only at transcript call sites (Electron `MessageBubble` and shared `SessionViewer`); previews/composers remain ordinary user messages. Do not weaken `parseIncomingAgentEnvelope` or rewrite stored/model-visible content.
+
+Incoming envelopes use the actual thinking/tool `WorkLogDisclosure` and `WorkLogHeader`. The whole raw body and all attachments belong inside it, never a surrounding user bubble or collapsed body excerpt. Copy uses the exact original content. Use stable message identity, not content as a React key, so live updates retain expansion. Expanded raw text must not be hidden by context badge substitution.
+
+`WorkLogDisclosure` is shared with `WorkLog`, but only tool logs opt out of transcript search. Keep header keyboard, focus, light/dark and compact behavior unified. Attachment previews are keyboard-operable buttons. Browser integration fixtures verify live and historical transcript paths with synthetic data.
