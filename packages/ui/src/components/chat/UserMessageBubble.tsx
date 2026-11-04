@@ -23,6 +23,8 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '../too
 import { TurnIconButton } from './turn/TurnIconButton'
 import { HOVER_REVEAL } from './turn/turn-classes'
 import { useTranslation } from 'react-i18next'
+import { parseIncomingAgentEnvelope } from './incoming-agent-envelope'
+import { IncomingAgentMessage } from './IncomingAgentMessage'
 
 // Fallback text icons for badges without iconDataUrl
 // Using simple characters since SVG rendering may not work in all contexts
@@ -311,6 +313,8 @@ function renderContentWithBadges(
 export interface UserMessageBubbleProps {
   /** Message content (markdown supported) */
   content: string
+  /** Opt in only at transcript call sites, never prompt/compose previews. */
+  collapseIncomingAgentMessages?: boolean
   /** Additional className for the outer container */
   className?: string
   /** Callback when a URL is clicked */
@@ -344,10 +348,12 @@ export function UserMessageBubble({
   badges,
   isQueued,
   compactMode,
+  collapseIncomingAgentMessages = false,
 }: UserMessageBubbleProps) {
   const { t } = useTranslation()
   const { copied, copy } = useCopyToClipboard()
   const hasAttachments = attachments && attachments.length > 0
+  const envelope = collapseIncomingAgentMessages ? parseIncomingAgentEnvelope(content) : null
 
   // Show the queued chip while `isQueued` is true AND for at least
   // QUEUED_MIN_VISIBLE_MS after it first became true — even if the backend
@@ -508,7 +514,7 @@ export function UserMessageBubble({
               aria-label={copied ? t('common.copied') : t('common.copy')}
               tooltip
               icon={copied ? <Check className="size-3.5 text-success" /> : <Copy />}
-              onClick={() => copy(displayContent)}
+              onClick={() => copy(envelope ? content : displayContent)}
               className="select-none"
             />
           </div>
@@ -524,7 +530,15 @@ export function UserMessageBubble({
               <span className="text-caption font-normal italic">{t('chat.queuedBadge')}</span>
             </div>
           )}
-          {hasInlineBadges
+          {envelope ? (
+            <IncomingAgentMessage
+              key={content}
+              envelope={envelope}
+              label={t('chat.incomingAgentMessage', { defaultValue: 'Agent message from {{name}}', name: envelope.senderName })}
+            >
+              {renderContentWithBadges(content, inlineBadges, onUrlClick, onFileClick)}
+            </IncomingAgentMessage>
+          ) : (hasInlineBadges
             ? renderContentWithBadges(displayContent, inlineBadges, onUrlClick, onFileClick)
             : (
               <Markdown
@@ -536,7 +550,8 @@ export function UserMessageBubble({
                 {displayContent}
               </Markdown>
             )
-          }
+          )}
+
         </div>
       </div>
     </div>

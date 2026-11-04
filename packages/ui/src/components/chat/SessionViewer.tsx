@@ -166,6 +166,7 @@ export function SessionViewer({
                   <div key={turn.message.id} className={CHAT_LAYOUT.userMessagePadding}>
                     <UserMessageBubble
                       content={turn.message.content}
+                      collapseIncomingAgentMessages
                       attachments={turn.message.attachments}
                       badges={turn.message.badges}
                       onUrlClick={platformActions.onOpenUrl}

@@ -66,6 +66,7 @@ export function MessageBubble({
     return (
       <UserMessageBubble
         content={message.content}
+        collapseIncomingAgentMessages
         attachments={message.attachments}
         badges={message.badges}
         isPending={message.isPending}
