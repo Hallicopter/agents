@@ -1920,6 +1920,8 @@ export class SessionManager implements ISessionManager {
    * Centralized setter for session processing state.
    * Automatically notifies the power manager on transitions (true→false, false→true)
    * so callers don't need to remember to call onSessionStarted/onSessionStopped.
+   * Publish actual turn ownership too: accepted/queued user messages are not a
+   * running signal, and a backend may reason silently before its first event.
    */
   private setProcessing(managed: ManagedSession, processing: boolean): void {
     const was = managed.isProcessing
@@ -1928,6 +1930,9 @@ export class SessionManager implements ISessionManager {
       sessionRuntimeHooks.onSessionStarted()
     } else if (was && !processing) {
       sessionRuntimeHooks.onSessionStopped()
+    }
+    if (was !== processing) {
+      this.sendEvent({ type: 'processing_changed', sessionId: managed.id, isProcessing: processing }, managed.workspace.id)
     }
   }
 

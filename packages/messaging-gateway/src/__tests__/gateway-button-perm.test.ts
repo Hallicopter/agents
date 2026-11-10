@@ -292,6 +292,20 @@ describe('MessagingGateway — perm: button (#726)', () => {
     expect(acks).toHaveLength(0)
   })
 
+  it('processing transitions do not claim that a pending approval was resolved', async () => {
+    const h = await makeHarness()
+    await registerPrompt(h.gateway, { requestId: 'req-1' })
+    for (const isProcessing of [false, true]) {
+      h.gateway.onSessionEvent('session:event', { to: 'workspace', workspaceId: 'ws-test' }, {
+        type: 'processing_changed', sessionId: 'sess-A', isProcessing,
+      })
+    }
+    expect(h.adapter.clearButtons).not.toHaveBeenCalled()
+    await h.adapter.fireButton(pressFor('perm:allow:req-1'))
+    expect(h.sessionManager.respondToPermission).toHaveBeenCalledTimes(1)
+    await h.gateway.stop()
+  })
+
   it('superseded prompt: a new permission_request for the same session sweeps the old entry', async () => {
     const h = await makeHarness()
     await registerPrompt(h.gateway, { requestId: 'req-1' })

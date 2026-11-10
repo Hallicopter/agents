@@ -434,6 +434,8 @@ export interface PermissionModeState {
 
 // turnId: Correlation ID from the API's message.id, groups all events in an assistant turn
 export type SessionEvent =
+  // Actual turn ownership, not message acceptance/queueing; includes silent agent setup/reasoning.
+  | { type: 'processing_changed'; sessionId: string; isProcessing: boolean }
   | { type: 'text_discard'; sessionId: string; turnId: string }
   // Remove these turns' assistant text and these tool calls (a reply the backend took back)
   | { type: 'messages_retracted'; sessionId: string; turnIds: string[]; toolUseIds: string[] }

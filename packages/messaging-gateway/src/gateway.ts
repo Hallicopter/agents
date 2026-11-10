@@ -405,6 +405,9 @@ export class MessagingGateway {
    * record we'd then need to re-create.
    */
   private sweepStalePermissions(event: SessionEvent): void {
+    // Turn ownership is not proof an approval was answered. In particular,
+    // processing can stop as part of a user-wait handoff.
+    if (event.type === 'processing_changed') return
     if (this.permissionMessages.size === 0) return
 
     const eventRequestId =

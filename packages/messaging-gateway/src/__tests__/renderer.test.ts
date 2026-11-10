@@ -11,7 +11,7 @@
  * Permissions and errors are mode-agnostic and tested separately.
  */
 
-import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from 'bun:test'
 import { Renderer, type SessionEvent } from '../renderer'
 import {
   DEFAULT_BINDING_CONFIG,
@@ -120,6 +120,7 @@ async function play(
 }
 
 const ev = {
+  processing: (isProcessing: boolean): SessionEvent => ({ type: 'processing_changed', sessionId: 's', isProcessing }),
   delta: (s: string, turnId?: string): SessionEvent => ({
     type: 'text_delta',
     sessionId: 's',
@@ -331,6 +332,166 @@ describe('Renderer — progress mode, Telegram native typing', () => {
     adapter.calls.filter((c) => c.kind === 'sendTyping')
   const textCalls = (adapter: ReturnType<typeof makeAdapter>) =>
     adapter.calls.filter((c) => c.kind === 'sendText' || c.kind === 'editMessage')
+
+  it('starts at processing ownership before any text/tool event, including a silent empty run', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await renderer.handle(ev.processing(true), binding, adapter)
+    expect(typingCalls(adapter)).toHaveLength(1)
+    jest.advanceTimersByTime(12_000)
+    expect(typingCalls(adapter)).toHaveLength(4)
+    expect(textCalls(adapter)).toHaveLength(0)
+
+    await play(renderer, binding, adapter, [ev.processing(false), ev.complete()])
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter)).toHaveLength(4)
+    expect(textCalls(adapter)).toHaveLength(0)
+  })
+
+  it('does not treat accepted/queued/replay notifications as running; false/true owns the timer', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    const queued = (status: string): SessionEvent => ({ type: 'user_message', sessionId: 's', status })
+    await play(renderer, binding, adapter, [queued('accepted'), queued('queued'), queued('processing')])
+    jest.advanceTimersByTime(8000)
+    expect(typingCalls(adapter)).toHaveLength(0)
+    await play(renderer, binding, adapter, [ev.processing(true), queued('queued'), ev.processing(true)])
+    expect(typingCalls(adapter)).toHaveLength(1)
+    await play(renderer, binding, adapter, [ev.processing(false), queued('processing'), ev.delta('late')])
+    jest.advanceTimersByTime(8000)
+    expect(typingCalls(adapter)).toHaveLength(1)
+    await renderer.handle(ev.processing(true), binding, adapter)
+    jest.advanceTimersByTime(4000)
+    expect(typingCalls(adapter)).toHaveLength(3)
+    expect(textCalls(adapter)).toHaveLength(0)
+  })
+
+  it('preserves final text across processing stop and sends exactly once at complete', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.processing(true), ev.final('answer'), ev.processing(false)])
+    expect(textCalls(adapter)).toHaveLength(0)
+    jest.advanceTimersByTime(8000)
+    expect(typingCalls(adapter)).toHaveLength(1)
+    await play(renderer, binding, adapter, [ev.complete(), ev.complete(), ev.delta('late')])
+    jest.advanceTimersByTime(8000)
+    expect(typingCalls(adapter)).toHaveLength(1)
+    expect(textCalls(adapter).map(c => c.text)).toEqual(['answer'])
+  })
+
+  it.each(['permission_request', 'credential_request', 'plan_submitted'])(
+    'duplicate lifecycle start and queued arrival do not resume a %s wait', async type => {
+      const adapter = makeAdapter()
+      const binding = makeBinding()
+      await renderer.handle(ev.processing(true), binding, adapter)
+      await renderer.handle({ type, sessionId: 's', request: { requestId: 'r', toolName: 'bash', description: 'test' }, message: { content: 'Plan' } }, binding, adapter)
+      await play(renderer, binding, adapter, [ev.processing(true), { type: 'user_message', sessionId: 's', status: 'queued' }])
+      jest.advanceTimersByTime(12_000)
+      expect(typingCalls(adapter)).toHaveLength(1)
+    },
+  )
+
+  it('stale wait callback cannot clear a resumed timer or create a duplicate loop', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    const timerSpy = spyOn(globalThis, 'setTimeout')
+    try {
+      await renderer.handle(ev.processing(true), binding, adapter)
+      const staleTick = timerSpy.mock.calls[0]![0] as () => void
+      await renderer.handle({ type: 'credential_request', sessionId: 's' }, binding, adapter)
+      // A handoff ends the old turn; approval starts a new one.
+      await play(renderer, binding, adapter, [ev.processing(false), ev.processing(true)])
+      expect(typingCalls(adapter)).toHaveLength(2)
+      staleTick() // callback already dispatched before its timeout was cleared
+      await renderer.handle(ev.delta('x'), binding, adapter)
+      expect(typingCalls(adapter)).toHaveLength(2)
+      jest.advanceTimersByTime(4000)
+      expect(typingCalls(adapter)).toHaveLength(3)
+      await renderer.handle(ev.complete(), binding, adapter)
+      staleTick()
+      jest.advanceTimersByTime(8000)
+      expect(typingCalls(adapter)).toHaveLength(3)
+    } finally {
+      timerSpy.mockRestore()
+    }
+  })
+
+  it.each(['error', 'typed_error'])('stops before a deferred %s send, without clobbering a newer run', async type => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    const delivered = Promise.withResolvers<SentMessage>()
+    adapter.sendText = () => delivered.promise
+    await renderer.handle(ev.processing(true), binding, adapter)
+    const reporting = renderer.handle({ type, sessionId: 's', error: 'boom' }, binding, adapter)
+    jest.advanceTimersByTime(8000)
+    expect(typingCalls(adapter)).toHaveLength(1)
+    await renderer.handle(ev.processing(true), binding, adapter)
+    delivered.resolve({ platform: 'telegram', channelId: binding.channelId, messageId: 'err' })
+    await reporting
+    jest.advanceTimersByTime(4000)
+    expect(typingCalls(adapter)).toHaveLength(3)
+  })
+
+  it('failed error delivery cannot leave a typing timer alive', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await renderer.handle(ev.processing(true), binding, adapter)
+    adapter.sendText = async () => { throw new Error('offline') }
+    await expect(renderer.handle({ type: 'error', sessionId: 's', error: 'boom' }, binding, adapter)).rejects.toThrow('offline')
+    jest.advanceTimersByTime(12_000)
+    expect(typingCalls(adapter)).toHaveLength(1)
+  })
+
+  it('a pending typing send resolving after stop does not reschedule activity', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    const sent = Promise.withResolvers<void>()
+    let attempts = 0
+    adapter.sendTyping = () => { attempts++; return sent.promise }
+    await renderer.handle(ev.processing(true), binding, adapter)
+    await renderer.handle(ev.complete(), binding, adapter)
+    sent.resolve()
+    await sent.promise
+    jest.advanceTimersByTime(12_000)
+    expect(attempts).toBe(1)
+  })
+
+  it.each(['interrupted', 'session_deleted'])('stops a silent run at %s and ignores late activity', async type => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await renderer.handle(ev.processing(true), binding, adapter)
+    await play(renderer, binding, adapter, [{ type, sessionId: 's' }, ev.delta('late'), ev.toolResult()])
+    jest.advanceTimersByTime(12_000)
+    expect(typingCalls(adapter)).toHaveLength(1)
+    expect(textCalls(adapter)).toHaveLength(0)
+  })
+
+  it('binding removal cancels a silent run timer', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await renderer.handle(ev.processing(true), binding, adapter)
+    renderer.removeBinding(binding.id)
+    jest.advanceTimersByTime(12_000)
+    expect(typingCalls(adapter)).toHaveLength(1)
+  })
+
+  it('does not start typing while already disconnected', async () => {
+    const adapter = makeAdapter()
+    adapter.isConnected = () => false
+    await renderer.handle(ev.processing(true), makeBinding(), adapter)
+    jest.advanceTimersByTime(12_000)
+    expect(typingCalls(adapter)).toHaveLength(0)
+  })
+
+  it.each([
+    ['telegram', 'streaming'], ['telegram', 'final_only'],
+    ['lark', 'progress'], ['whatsapp', 'progress'],
+  ] as const)('ignores processing transitions for %s / %s', async (platform, responseMode) => {
+    const adapter = makeAdapter({}, platform)
+    await play(renderer, makeBinding({ responseMode }, platform), adapter, [ev.processing(true), ev.processing(false)])
+    jest.advanceTimersByTime(12_000)
+    expect(adapter.calls).toHaveLength(0)
+  })
 
   it('tool-only run: no status bubble, no final send, typing started then stopped', async () => {
     const adapter = makeAdapter()
@@ -546,6 +707,27 @@ describe('Renderer — progress mode, Telegram native typing', () => {
     release?.()
     await Promise.all([first, second])
     expect(sent).toEqual(['answer'])
+  })
+
+  it('a deferred final send cannot stop typing or clear text for a newer run', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    const sent = Promise.withResolvers<SentMessage>()
+    adapter.sendText = () => sent.promise
+    await play(renderer, binding, adapter, [ev.processing(true), ev.final('first'), ev.processing(false)])
+    const finishing = renderer.handle(ev.complete(), binding, adapter)
+    await play(renderer, binding, adapter, [ev.processing(true), ev.final('second')])
+    sent.resolve({ platform: 'telegram', channelId: binding.channelId, messageId: 'first' })
+    await finishing
+    jest.advanceTimersByTime(4000)
+    expect(typingCalls(adapter)).toHaveLength(3)
+    const sends: string[] = []
+    adapter.sendText = async (channelId, text) => {
+      sends.push(text)
+      return { platform: 'telegram', channelId, messageId: 'second' }
+    }
+    await play(renderer, binding, adapter, [ev.processing(false), ev.complete()])
+    expect(sends).toEqual(['second'])
   })
 
   it('self-terminates the typing loop when the adapter disconnects', async () => {

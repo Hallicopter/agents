@@ -80,6 +80,8 @@ interface RenderState {
   streamingTurnId: string | null
   /** Whether the agent is currently processing. */
   processing: boolean
+  /** Telegram progress: once lifecycle events arrive, activity cannot revive a stopped turn. */
+  hasProcessingLifecycle: boolean
   /** Streaming: the message ID being edited (Telegram only). */
   streamingMessageId: string | null
   /** Whether the streaming bubble currently shows a transient retry status. */
@@ -113,9 +115,8 @@ interface RenderState {
   /** Telegram progress: whether a typing indicator is currently being refreshed. */
   typingActive: boolean
   /**
-   * Monotonic per-binding run counter. Bumped on every reset so a typing
-   * timer scheduled by a finished run can detect it is stale and bail out
-   * instead of resurrecting activity for a run that already ended.
+   * Monotonic typing epoch. Bumped on every stop (including user waits),
+   * so a stale callback cannot clear a resumed run's timer or restart typing.
    */
   runEpoch: number
 }
@@ -189,6 +190,7 @@ export class Renderer {
         textBuffer: '',
         streamingTurnId: null,
         processing: false,
+        hasProcessingLifecycle: false,
         streamingMessageId: null,
         streamingRetryPlaceholder: false,
         editTimer: null,
@@ -480,6 +482,20 @@ export class Renderer {
     const useTyping = binding.platform === 'telegram'
 
     switch (event.type) {
+      case 'processing_changed': {
+        if (!useTyping) return
+        const processing = event.isProcessing === true
+        // A duplicate start must not resume a permission/credential/plan wait.
+        if (state.hasProcessingLifecycle && state.processing === processing) return
+        state.hasProcessingLifecycle = true
+        state.processing = processing
+        if (processing) this.startTyping(state, binding, adapter)
+        else this.stopTyping(state)
+        // Do not reset finalBuffer here: complete delivers it after cleanup,
+        // and queued replay can start another turn without a session complete.
+        return
+      }
+
       case 'text_delta':
         // Tokens are not shown in progress mode — we wait for text_complete.
         // On Telegram, a delta is proof the run is alive, so keep typing on.
@@ -534,6 +550,10 @@ export class Renderer {
         }
         return
       }
+
+      case 'session_deleted':
+        if (useTyping) this.resetRun(state)
+        return
 
       case 'interrupted': {
         // User stop / abort. resetRun stops the typing indicator and bumps the
@@ -594,24 +614,25 @@ export class Renderer {
    *
    * Idempotent: while a refresh timer is pending this is a no-op, so a burst
    * of `text_delta` / `tool_*` events cannot spawn duplicate loops. The timer
-   * captures the current `runEpoch`; if the run is reset before it fires, the
-   * callback sees the mismatch and stops instead of resurrecting a finished
-   * run. `stopTyping` clears the timer on every terminal path.
+   * captures the current `runEpoch`; if typing stops before it fires, the
+   * callback sees the mismatch before touching the timer of a resumed run.
+   * `stopTyping` invalidates callbacks on both terminal paths and user waits.
    */
   private startTyping(
     state: RenderState,
     binding: ChannelBinding,
     adapter: PlatformAdapter,
   ): void {
-    if (state.typingTimer) return
+    if (state.hasProcessingLifecycle && !state.processing) return
+    if (state.typingTimer || !adapter.isConnected()) return
 
     const epoch = state.runEpoch
     state.typingActive = true
     void adapter.sendTyping(binding.channelId, bindingOpts(binding)).catch(() => {})
 
     state.typingTimer = setTimeout(() => {
-      state.typingTimer = null
       if (!state.typingActive || state.runEpoch !== epoch) return
+      state.typingTimer = null
       // The gateway drops session events while an adapter is disconnected, so
       // a `complete`/`error` may never reach us. Self-terminate the loop within
       // one refresh interval instead of leaving a dangling timer behind.
@@ -625,6 +646,7 @@ export class Renderer {
 
   /** Stop the typing indicator and cancel any pending refresh timer. */
   private stopTyping(state: RenderState): void {
+    state.runEpoch++
     state.typingActive = false
     if (state.typingTimer) {
       clearTimeout(state.typingTimer)
@@ -860,9 +882,15 @@ Approve in the desktop app to continue.`,
     state: RenderState,
   ): Promise<void> {
     const errorMsg = extractErrorMessage(event.error)
-    this.cancelEditTimer(state)
+    const useTyping = binding.platform === 'telegram' &&
+      resolveResponseMode(binding.config.responseMode, binding.config.streamResponses) === 'progress'
+    // Native typing starts before output, so even setup errors must stop it
+    // synchronously if delivery stalls/fails. A late error send must not reset
+    // a newer turn. Keep other platforms/modes' existing reset ordering.
+    if (useTyping) this.resetRun(state)
+    else this.cancelEditTimer(state)
     await adapter.sendText(binding.channelId, `❌ ${errorMsg}`, bindingOpts(binding))
-    this.resetRun(state)
+    if (!useTyping) this.resetRun(state)
   }
 
   // ---------------------------------------------------------------------------
@@ -908,8 +936,6 @@ Approve in the desktop app to continue.`,
   private resetRun(state: RenderState): void {
     this.cancelEditTimer(state)
     this.stopTyping(state)
-    // Invalidate any timer scheduled by the run that just ended.
-    state.runEpoch++
     state.textBuffer = ''
     state.streamingTurnId = null
     state.streamingMessageId = null
