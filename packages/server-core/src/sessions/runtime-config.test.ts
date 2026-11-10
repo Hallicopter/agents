@@ -68,6 +68,18 @@ describe('buildBackendRuntimeSignature', () => {
   it('ignores non-runtime metadata such as lastUsedAt', () => {
     expect(sig({ ...baseCompat, lastUsedAt: 1 })).toBe(sig({ ...baseCompat, lastUsedAt: 2 }))
   })
+
+  // Reasoning changes the registered model definition, so toggling it must
+  // refresh live sessions instead of only applying after a restart.
+  it('changes when the custom endpoint reasoning capability changes', () => {
+    const withReasoning = (reasoning?: boolean) => sig({
+      ...baseCompat,
+      customEndpoint: { api: 'anthropic-messages', supportsImages: true, reasoning },
+    })
+
+    expect(withReasoning(true)).not.toBe(withReasoning(false))
+    expect(withReasoning(true)).not.toBe(withReasoning(undefined))
+  })
 })
 
 describe('filterAttachmentsForModelInput', () => {

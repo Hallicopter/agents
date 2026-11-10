@@ -99,4 +99,21 @@ describe('buildCustomEndpointModelDef', () => {
     const model = buildCustomEndpointModelDef('some-model')
     expect((model as { compat?: unknown }).compat).toBeUndefined()
   })
+
+  // Reasoning is opt-in per connection: an arbitrary endpoint's thinking support
+  // cannot be probed, so the default must stay non-reasoning (thinking clamped off).
+  it('defaults custom endpoint models to non-reasoning', () => {
+    expect(buildCustomEndpointModelDef('my-model').reasoning).toBe(false)
+    expect(buildCustomEndpointModelDef('my-model', { reasoning: false }).reasoning).toBe(false)
+  })
+
+  it('marks models reasoning-capable only when the connection explicitly opts in', () => {
+    expect(buildCustomEndpointModelDef('my-model', { reasoning: true }).reasoning).toBe(true)
+  })
+
+  it('does not invent a thinkingLevelMap for opted-in endpoints', () => {
+    // Levels the endpoint has not been verified to support must not be advertised.
+    const model = buildCustomEndpointModelDef('my-model', { reasoning: true })
+    expect((model as { thinkingLevelMap?: unknown }).thinkingLevelMap).toBeUndefined()
+  })
 })

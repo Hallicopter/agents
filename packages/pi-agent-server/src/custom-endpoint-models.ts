@@ -14,11 +14,19 @@ export const DEFAULT_CUSTOM_ENDPOINT_MAX_TOKENS = 8_192
 export interface CustomEndpointConfig {
   api: CustomEndpointApi
   supportsImages?: boolean
+  /** Explicit reasoning capability opt-in; see CustomEndpointModelDefaults.reasoning. */
+  reasoning?: boolean
   maxTokens?: number
 }
 
 export interface CustomEndpointModelDefaults {
   supportsImages?: boolean
+  /**
+   * Explicit reasoning capability for this endpoint. Defaults to false because an
+   * arbitrary endpoint's thinking support cannot be probed. Opt in only for
+   * endpoints verified to accept thinking payloads.
+   */
+  reasoning?: boolean
   maxTokens?: number
 }
 
@@ -100,7 +108,7 @@ export function buildCustomEndpointModelDef(
   return {
     id,
     name: id,
-    reasoning: false,
+    reasoning: defaults?.reasoning === true,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: overrides?.contextWindow ?? 131_072,

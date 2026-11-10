@@ -111,6 +111,14 @@ export interface CustomEndpointConfig {
   /** Explicit capability hint for arbitrary endpoints — never guessed automatically. */
   supportsImages?: boolean;
   /**
+   * Explicit reasoning/thinking capability hint for arbitrary endpoints — never
+   * guessed automatically. When true, models on this endpoint are registered as
+   * reasoning-capable so the requested thinking level reaches the provider
+   * instead of being clamped to `off`. Opt in per connection only after
+   * verifying the endpoint accepts thinking payloads.
+   */
+  reasoning?: boolean;
+  /**
    * Output-token cap for every model on this endpoint (positive integer; default 8192).
    * Pi also bounds compaction summaries by it, so raise it when long sessions fail
    * to compact. Must not exceed what the server accepts.

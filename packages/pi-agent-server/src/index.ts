@@ -518,6 +518,7 @@ function registerCustomEndpointModels(
       id,
       {
         supportsImages: initConfig?.customEndpoint?.supportsImages === true,
+        reasoning: initConfig?.customEndpoint?.reasoning === true,
         maxTokens: initConfig?.customEndpoint?.maxTokens,
       },
       customModelOverrides.get(id),

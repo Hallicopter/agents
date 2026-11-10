@@ -81,6 +81,11 @@ export function buildBackendRuntimeSignature(input: BackendRuntimeSignatureInput
                     supportsImages: typeof connection.customEndpoint.supportsImages === 'boolean'
                       ? connection.customEndpoint.supportsImages
                       : undefined,
+                    // Reasoning capability changes the registered model definition,
+                    // so toggling it must invalidate an existing runtime.
+                    reasoning: typeof connection.customEndpoint.reasoning === 'boolean'
+                      ? connection.customEndpoint.reasoning
+                      : undefined,
                     maxTokens: connection.customEndpoint.maxTokens,
                   })
                 : undefined,
