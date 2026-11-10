@@ -2,10 +2,12 @@
 
 ## Telegram progress lifecycle
 
-- `SessionManager.setProcessing` publishes `processing_changed` only on actual turn ownership transitions. Message acceptance, queued arrival, and `user_message:processing` (replay notification) are not execution-start signals. Start Telegram progress-mode native typing from the lifecycle event, before agent setup or silent reasoning, not from inbound routing.
+- `SessionManager.setProcessing` publishes `processing_changed` with the existing `processingGeneration` only on actual turn ownership transitions (increment before publishing start). Message acceptance, queued arrival, and `user_message:processing` (replay notification) are not execution-start signals. Start Telegram progress-mode native typing from the lifecycle event, before agent setup or silent reasoning, not from inbound routing.
 - Other platforms and response modes ignore this lifecycle event. Preserve Telegram's strict final-only output: no status bubbles or intermediate-only fallback.
 - Processing-stop cancels typing without clearing the final buffer: final delivery happens at `complete`, which may follow asynchronous cleanup; queued replay can start another turn without a session-level complete. Existing backend activity still supports permission resumption and older event producers. Once lifecycle events are available, activity cannot revive a stopped turn.
 - Every typing stop invalidates the timer epoch, including permission/credential/plan waits. A stale callback must check its epoch before touching the current timer. Stop/reset before awaiting terminal message delivery, so slow/failing sends cannot keep typing alive or reset a newer run.
+- Deduplicate starts by generation, not processing boolean alone: a disconnect may drop the previous stop/complete. A newer generation must start immediately and discard stranded old state; a same-generation duplicate must not resume an approval wait. Ignore stale-generation stops.
+- Stop cleanup and plan handoffs must recheck captured generation **and session identity** after browser/metadata awaits, before emitting completion or releasing/discarding a replacement turn's resources. The browser-release helper accepts an optional current-owner predicate so a delayed unbind cannot steal replacement ownership.
 - Processing transitions do not resolve permission prompts; keep them out of the gateway's stale-permission sweep.
 
 ## Validation and builds

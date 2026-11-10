@@ -1932,7 +1932,7 @@ export class SessionManager implements ISessionManager {
       sessionRuntimeHooks.onSessionStopped()
     }
     if (was !== processing) {
-      this.sendEvent({ type: 'processing_changed', sessionId: managed.id, isProcessing: processing }, managed.workspace.id)
+      this.sendEvent({ type: 'processing_changed', sessionId: managed.id, isProcessing: processing, generation: managed.processingGeneration }, managed.workspace.id)
     }
   }
 
@@ -4908,69 +4908,7 @@ export class SessionManager implements ISessionManager {
       }
 
       // Wire up onPlanSubmitted to add plan message to conversation
-      managed.agent.onPlanSubmitted = async (planPath) => {
-        sessionLog.info(`Plan submitted for session ${managed.id}:`, planPath)
-        try {
-          // Read the plan file content
-          const planContent = await readFile(planPath, 'utf-8')
-
-          // Mark the SubmitPlan tool message as completed (it won't get a tool_result due to forceAbort)
-          const submitPlanMsg = managed.messages.find(
-            m => m.toolName?.includes('SubmitPlan') && m.toolStatus === 'executing'
-          )
-          if (submitPlanMsg) {
-            submitPlanMsg.toolStatus = 'completed'
-            submitPlanMsg.content = 'Plan submitted for review'
-            submitPlanMsg.toolResult = 'Plan submitted for review'
-          }
-
-          // Create a plan message
-          const planMessage = {
-            id: `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            role: 'plan' as const,
-            content: planContent,
-            timestamp: this.monotonic(),
-            planPath,
-          }
-
-          // Add to session messages
-          managed.messages.push(planMessage)
-
-          // Update lastMessageRole for badge display
-          managed.lastMessageRole = 'plan'
-
-          // Send event to renderer
-          this.sendEvent({
-            type: 'plan_submitted',
-            sessionId: managed.id,
-            message: planMessage,
-          }, managed.workspace.id)
-
-          // Interrupt execution - plan presentation is a stopping point
-          // The user needs to review and respond before continuing
-          if (managed.isProcessing && managed.agent) {
-            sessionLog.info(`Interrupting for plan submission in session ${managed.id}`)
-            managed.agent.interruptForHandoff(AbortReason.PlanSubmitted)
-            this.recoverPendingSteers(managed)
-            this.setProcessing(managed, false)
-
-            // Release browser overlay + session binding because the agent is no longer running.
-            // Plan submission pauses execution until user review, so browser ownership should not remain locked.
-            await releaseBrowserOwnershipOnForcedStop(
-              (sid) => this.getBrowserPaneManagerForSession(sid),
-              managed.id,
-            )
-
-            // Send complete event so renderer knows processing stopped (include tokenUsage for real-time updates)
-            this.sendEvent({ type: 'complete', sessionId: managed.id, tokenUsage: managed.tokenUsage, backgroundTasksAlive: this.keepBackgroundTasksAlive }, managed.workspace.id)
-
-            // Persist session state
-            this.persistSession(managed)
-          }
-        } catch (error) {
-          sessionLog.error(`Failed to read plan file:`, error)
-        }
-      }
+      managed.agent.onPlanSubmitted = (planPath) => this.handlePlanSubmitted(managed, planPath)
 
       // Wire up onAuthRequest to add auth message to conversation and pause execution
       managed.agent.onAuthRequest = (request) => {
@@ -5015,9 +4953,11 @@ export class SessionManager implements ISessionManager {
           this.setProcessing(managed, false)
 
           // Release browser overlay + session binding because the agent is paused awaiting user auth.
+          const handoffGeneration = managed.processingGeneration
           void releaseBrowserOwnershipOnForcedStop(
             (sid) => this.getBrowserPaneManagerForSession(sid),
             managed.id,
+            () => this.sessions.get(managed.id) === managed && managed.processingGeneration === handoffGeneration,
           )
 
           // Send complete event so renderer knows processing stopped (include tokenUsage for real-time updates)
@@ -6976,10 +6916,10 @@ export class SessionManager implements ISessionManager {
     authorize?.()
     if (!existingMessageId) onAck?.(userMessage.id, { delivery: 'delivered', targetBusy: false })
     managed.lastMessageAt = Date.now()
+    managed.processingGeneration++
     this.setProcessing(managed, true)
     managed.streamingText = ''
     managed.streamingTurnId = undefined
-    managed.processingGeneration++
     managed.turnStartFinalMessageId = this.getLastFinalAssistantMessageId(managed.messages)
     // A new turn: an auto-retry of this one already carries the earlier turn's steers.
     managed.turnSteers = []
@@ -7719,6 +7659,76 @@ export class SessionManager implements ISessionManager {
     managed.acceptedSteers?.clear()
   }
 
+  /** Plan handoff is independently awaitable so stale cleanup is guarded and testable. */
+  private async handlePlanSubmitted(managed: ManagedSession, planPath: string): Promise<void> {
+    const generation = managed.processingGeneration
+    const isCurrentTurn = () => this.sessions.get(managed.id) === managed && managed.processingGeneration === generation
+    sessionLog.info(`Plan submitted for session ${managed.id}:`, planPath)
+    try {
+      // Read the plan file content
+      const planContent = await readFile(planPath, 'utf-8')
+      if (!isCurrentTurn()) return
+
+      // Mark the SubmitPlan tool message as completed (it won't get a tool_result due to forceAbort)
+      const submitPlanMsg = managed.messages.find(
+        m => m.toolName?.includes('SubmitPlan') && m.toolStatus === 'executing'
+      )
+      if (submitPlanMsg) {
+        submitPlanMsg.toolStatus = 'completed'
+        submitPlanMsg.content = 'Plan submitted for review'
+        submitPlanMsg.toolResult = 'Plan submitted for review'
+      }
+
+      // Create a plan message
+      const planMessage = {
+        id: `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        role: 'plan' as const,
+        content: planContent,
+        timestamp: this.monotonic(),
+        planPath,
+      }
+
+      // Add to session messages
+      managed.messages.push(planMessage)
+
+      // Update lastMessageRole for badge display
+      managed.lastMessageRole = 'plan'
+
+      // Send event to renderer
+      this.sendEvent({
+        type: 'plan_submitted',
+        sessionId: managed.id,
+        message: planMessage,
+      }, managed.workspace.id)
+
+      // Interrupt execution - plan presentation is a stopping point
+      // The user needs to review and respond before continuing
+      if (managed.isProcessing && managed.agent) {
+        sessionLog.info(`Interrupting for plan submission in session ${managed.id}`)
+        managed.agent.interruptForHandoff(AbortReason.PlanSubmitted)
+        this.recoverPendingSteers(managed)
+        this.setProcessing(managed, false)
+
+        // Release browser overlay + session binding because the agent is no longer running.
+        // Plan submission pauses execution until user review, so browser ownership should not remain locked.
+        await releaseBrowserOwnershipOnForcedStop(
+          (sid) => this.getBrowserPaneManagerForSession(sid),
+          managed.id,
+          isCurrentTurn,
+        )
+        if (!isCurrentTurn()) return
+
+        // Send complete event so renderer knows processing stopped (include tokenUsage for real-time updates)
+        this.sendEvent({ type: 'complete', sessionId: managed.id, tokenUsage: managed.tokenUsage, backgroundTasksAlive: this.keepBackgroundTasksAlive }, managed.workspace.id)
+
+        // Persist session state
+        this.persistSession(managed)
+      }
+    } catch (error) {
+      sessionLog.error(`Failed to read plan file:`, error)
+    }
+  }
+
   /**
    * Central handler for when processing stops (any reason).
    * Single source of truth for cleanup and queue processing.
@@ -7732,6 +7742,12 @@ export class SessionManager implements ISessionManager {
   ): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed) return
+
+    // Stop cleanup yields to browser/metadata I/O. A new send can claim the
+    // now-idle session meanwhile; the old cleanup must not complete, unbind,
+    // drain the queue or dispose the replacement turn when it resumes.
+    const generation = managed.processingGeneration
+    const isCurrentTurn = () => this.sessions.get(sessionId) === managed && managed.processingGeneration === generation
 
     sessionLog.info(`Processing stopped for session ${sessionId}: ${reason}`)
 
@@ -7771,6 +7787,8 @@ export class SessionManager implements ISessionManager {
       }
     }
 
+    if (!isCurrentTurn()) return
+
     // 2. Handle unread state based on whether user is viewing this session
     //    This is the explicit state machine for NEW badge:
     //    - If user is viewing: mark as read (they saw it complete)
@@ -7789,10 +7807,13 @@ export class SessionManager implements ISessionManager {
         if (!managed.hasUnread) {
           managed.hasUnread = true
           await updateSessionMetadata(managed.workspace.rootPath, sessionId, { hasUnread: true })
+          if (!isCurrentTurn()) return
           this.emitUnreadSummaryChanged()
         }
       }
     }
+
+    if (!isCurrentTurn()) return
 
     // 3. Auto-complete mini agent sessions to avoid session list clutter
     //    Mini agents are spawned from EditPopovers for quick config edits
@@ -7801,6 +7822,8 @@ export class SessionManager implements ISessionManager {
       sessionLog.info(`Auto-completing mini agent session ${sessionId}`)
       await this.setSessionStatus(sessionId, 'done')
     }
+
+    if (!isCurrentTurn()) return
 
     // 4. Apply deferred external metadata updates captured while processing.
     if (managed.pendingExternalMetadata) {
@@ -7826,11 +7849,14 @@ export class SessionManager implements ISessionManager {
         // before emitSessionComplete, hanging the Tasks Conductor completion seam.
         try {
           await doneBpm.clearVisualsForSession(sessionId)
+          if (!isCurrentTurn()) return
           doneBpm.unbindAllForSession(sessionId)
         } catch (err) {
           sessionLog.warn(`Browser-pane teardown failed for ${sessionId} (continuing to completion):`, err)
         }
       }
+
+      if (!isCurrentTurn()) return
 
       // No queue - emit complete to UI (include tokenUsage and hasUnread for state updates)
       this.sendEvent({
@@ -7862,7 +7888,9 @@ export class SessionManager implements ISessionManager {
         tokenUsage: managed.tokenUsage,
       })
 
+      if (!isCurrentTurn()) return
       await this.disposeManagedAgentRuntime(managed, `processing ${reason}`)
+      if (!isCurrentTurn()) return
 
       // Hidden/mini sessions have no status worth changing; task sessions are the Conductor's.
       if (reason === 'complete' && didReceiveNewFinalMessage && currentFinalMessageId

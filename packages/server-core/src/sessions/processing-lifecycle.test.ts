@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionEvent } from '@craft-agent/shared/protocol'
@@ -135,6 +135,119 @@ describe('processing lifecycle → Telegram progress', () => {
     expect(events.some(e => e.type === 'error')).toBe(true)
     expect(managed.isProcessing).toBe(false)
     expect(typing).toBe(1)
+  })
+
+  it.each([1, 2])('old stop cleanup cannot complete/unbind/dispose a replacement after browser await %s', async gateOn => {
+    const agent = silentAgent()
+    const cleanupEntered = Promise.withResolvers<void>()
+    const cleanupGate = Promise.withResolvers<void>()
+    let clears = 0
+    let unbinds = 0
+    let disposals = 0
+    ;(sm as any).getBrowserPaneManagerForSession = () => ({
+      clearVisualsForSession: async () => {
+        if (++clears === gateOn) { cleanupEntered.resolve(); await cleanupGate.promise }
+      },
+      unbindAllForSession: () => { unbinds++ },
+    })
+    ;(sm as any).disposeManagedAgentRuntime = async () => { disposals++ }
+    const stop = (sm as any).onProcessingStopped.bind(sm)
+    let cleanup: Promise<void> | undefined
+    ;(sm as any).onProcessingStopped = (...args: unknown[]) => (cleanup = stop(...args))
+    const first = sm.sendMessage(managed.id, 'first', undefined, undefined, { hidden: true })
+    await agent.started[0]!.promise
+    agent.gates[0]!.resolve()
+    await cleanupEntered.promise
+    await first
+    const oldCleanup = cleanup!
+    const second = sm.sendMessage(managed.id, 'replacement', undefined, undefined, { hidden: true })
+    await agent.started[1]!.promise
+    cleanupGate.resolve()
+    await oldCleanup
+    expect(transitions(events)).toEqual([true, false, true])
+    expect(events.some(e => e.type === 'complete')).toBe(false)
+    expect(managed.isProcessing).toBe(true)
+    expect((renderer as any).states.get('binding').typingActive).toBe(true)
+    expect(unbinds).toBe(0)
+    expect(disposals).toBe(0)
+    agent.gates[1]!.resolve()
+    await second
+    await completed.promise
+    await cleanup
+    expect(transitions(events)).toEqual([true, false, true, false])
+    expect(disposals).toBe(1)
+  })
+
+  it('old cleanup cannot complete or unbind a different session object reusing the ID', async () => {
+    const entered = Promise.withResolvers<void>()
+    const gate = Promise.withResolvers<void>()
+    let unbinds = 0
+    ;(sm as any).getBrowserPaneManagerForSession = () => ({
+      clearVisualsForSession: async () => { entered.resolve(); await gate.promise },
+      unbindAllForSession: () => { unbinds++ },
+    })
+    ;(sm as any).setProcessing(managed, true)
+    const cleanup = (sm as any).onProcessingStopped(managed.id, 'complete')
+    await entered.promise
+    const replacement = createManagedSession({ id: managed.id, name: 'Replacement' }, managed.workspace, { messagesLoaded: true })
+    ;(sm as any).sessions.set(managed.id, replacement)
+    gate.resolve()
+    await cleanup
+    expect(events.some(e => e.type === 'complete')).toBe(false)
+    expect(unbinds).toBe(0)
+  })
+
+  it('plan handoff awaiting browser release cannot complete or unbind a fast accepted turn', async () => {
+    const agent = silentAgent()
+    const cleanupEntered = Promise.withResolvers<void>()
+    const cleanupGate = Promise.withResolvers<void>()
+    let firstClear = true
+    let unbinds = 0
+    ;(sm as any).getBrowserPaneManagerForSession = () => ({
+      clearVisualsForSession: async () => {
+        if (firstClear) { firstClear = false; cleanupEntered.resolve(); await cleanupGate.promise }
+      },
+      unbindAllForSession: () => { unbinds++ },
+    })
+    // The real plan callback uses this agent handle to pause the old iterator.
+    managed.agent = { interruptForHandoff: () => {} } as any
+    ;(sm as any).disposeManagedAgentRuntime = async () => {}
+    const first = sm.sendMessage(managed.id, 'make plan', undefined, undefined, { hidden: true })
+    await agent.started[0]!.promise
+    const planPath = join(root, 'plan.md')
+    writeFileSync(planPath, '# Plan\nDo the work')
+    const handoff = (sm as any).handlePlanSubmitted(managed, planPath)
+    await cleanupEntered.promise
+    expect(events.some(e => e.type === 'plan_submitted')).toBe(true)
+    const second = sm.sendMessage(managed.id, 'accept plan', undefined, undefined, { hidden: true })
+    await agent.started[1]!.promise
+    cleanupGate.resolve()
+    await handoff
+    expect(transitions(events)).toEqual([true, false, true])
+    expect(events.some(e => e.type === 'complete')).toBe(false)
+    expect(unbinds).toBe(0)
+    expect(managed.isProcessing).toBe(true)
+    expect((renderer as any).states.get('binding').typingActive).toBe(true)
+    agent.gates[0]!.resolve()
+    await first
+    agent.gates[1]!.resolve()
+    await second
+    await completed.promise
+  })
+
+  it('plan handoff with no replacement still completes and releases ownership', async () => {
+    const planPath = join(root, 'normal-plan.md')
+    writeFileSync(planPath, '# Plan')
+    let unbinds = 0
+    ;(sm as any).getBrowserPaneManagerForSession = () => ({ clearVisualsForSession: async () => {}, unbindAllForSession: () => { unbinds++ } })
+    managed.agent = { interruptForHandoff: () => {} } as any
+    managed.processingGeneration = 1
+    ;(sm as any).setProcessing(managed, true)
+    await (sm as any).handlePlanSubmitted(managed, planPath)
+    expect(transitions(events)).toEqual([true, false])
+    expect(events.some(e => e.type === 'complete')).toBe(true)
+    expect(unbinds).toBe(1)
+    expect((renderer as any).states.get('binding').typingActive).toBe(false)
   })
 
   it('central setter deduplicates transitions', () => {

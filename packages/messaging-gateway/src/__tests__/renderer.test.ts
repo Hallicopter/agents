@@ -120,7 +120,7 @@ async function play(
 }
 
 const ev = {
-  processing: (isProcessing: boolean): SessionEvent => ({ type: 'processing_changed', sessionId: 's', isProcessing }),
+  processing: (isProcessing: boolean, generation = 1): SessionEvent => ({ type: 'processing_changed', sessionId: 's', isProcessing, generation }),
   delta: (s: string, turnId?: string): SessionEvent => ({
     type: 'text_delta',
     sessionId: 's',
@@ -360,7 +360,7 @@ describe('Renderer — progress mode, Telegram native typing', () => {
     await play(renderer, binding, adapter, [ev.processing(false), queued('processing'), ev.delta('late')])
     jest.advanceTimersByTime(8000)
     expect(typingCalls(adapter)).toHaveLength(1)
-    await renderer.handle(ev.processing(true), binding, adapter)
+    await renderer.handle(ev.processing(true, 2), binding, adapter)
     jest.advanceTimersByTime(4000)
     expect(typingCalls(adapter)).toHaveLength(3)
     expect(textCalls(adapter)).toHaveLength(0)
@@ -400,7 +400,7 @@ describe('Renderer — progress mode, Telegram native typing', () => {
       const staleTick = timerSpy.mock.calls[0]![0] as () => void
       await renderer.handle({ type: 'credential_request', sessionId: 's' }, binding, adapter)
       // A handoff ends the old turn; approval starts a new one.
-      await play(renderer, binding, adapter, [ev.processing(false), ev.processing(true)])
+      await play(renderer, binding, adapter, [ev.processing(false), ev.processing(true, 2)])
       expect(typingCalls(adapter)).toHaveLength(2)
       staleTick() // callback already dispatched before its timeout was cleared
       await renderer.handle(ev.delta('x'), binding, adapter)
@@ -425,7 +425,7 @@ describe('Renderer — progress mode, Telegram native typing', () => {
     const reporting = renderer.handle({ type, sessionId: 's', error: 'boom' }, binding, adapter)
     jest.advanceTimersByTime(8000)
     expect(typingCalls(adapter)).toHaveLength(1)
-    await renderer.handle(ev.processing(true), binding, adapter)
+    await renderer.handle(ev.processing(true, 2), binding, adapter)
     delivered.resolve({ platform: 'telegram', channelId: binding.channelId, messageId: 'err' })
     await reporting
     jest.advanceTimersByTime(4000)
@@ -716,7 +716,7 @@ describe('Renderer — progress mode, Telegram native typing', () => {
     adapter.sendText = () => sent.promise
     await play(renderer, binding, adapter, [ev.processing(true), ev.final('first'), ev.processing(false)])
     const finishing = renderer.handle(ev.complete(), binding, adapter)
-    await play(renderer, binding, adapter, [ev.processing(true), ev.final('second')])
+    await play(renderer, binding, adapter, [ev.processing(true, 2), ev.final('second')])
     sent.resolve({ platform: 'telegram', channelId: binding.channelId, messageId: 'first' })
     await finishing
     jest.advanceTimersByTime(4000)
@@ -726,7 +726,7 @@ describe('Renderer — progress mode, Telegram native typing', () => {
       sends.push(text)
       return { platform: 'telegram', channelId, messageId: 'second' }
     }
-    await play(renderer, binding, adapter, [ev.processing(false), ev.complete()])
+    await play(renderer, binding, adapter, [ev.processing(false, 2), ev.complete()])
     expect(sends).toEqual(['second'])
   })
 
@@ -744,6 +744,43 @@ describe('Renderer — progress mode, Telegram native typing', () => {
     jest.advanceTimersByTime(20_000)
     expect(typingCalls(adapter).length).toBe(afterDisconnect)
   })
+
+  it('new generation starts after disconnect dropped the previous stop/complete, with one timer', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.processing(true), ev.final('stranded old text')])
+    adapter.isConnected = () => false
+    jest.advanceTimersByTime(4000) // refresh detects disconnect and self-stops
+    // Gateway drops generation 1's processing(false) and complete.
+    adapter.isConnected = () => true
+    await renderer.handle(ev.processing(true, 2), binding, adapter)
+    expect(typingCalls(adapter)).toHaveLength(2) // immediate, before any output
+    await play(renderer, binding, adapter, [ev.processing(true, 2), ev.processing(false, 1)])
+    jest.advanceTimersByTime(4000)
+    expect(typingCalls(adapter)).toHaveLength(3) // no duplicate loop or stale stop
+    await play(renderer, binding, adapter, [ev.final('new answer'), ev.processing(false, 2), ev.complete()])
+    expect(textCalls(adapter).map(c => c.text)).toEqual(['new answer'])
+    jest.advanceTimersByTime(8000)
+    expect(typingCalls(adapter)).toHaveLength(3)
+  })
+
+  it.each(['permission_request', 'credential_request', 'plan_submitted'])(
+    'reconnecting and a same-generation start cannot resume a %s wait', async type => {
+      const adapter = makeAdapter()
+      const binding = makeBinding()
+      await renderer.handle(ev.processing(true), binding, adapter)
+      await renderer.handle({ type, sessionId: 's', request: { requestId: 'r', toolName: 'bash', description: 'test' }, message: { content: 'Plan' } }, binding, adapter)
+      adapter.isConnected = () => false
+      jest.advanceTimersByTime(8000)
+      adapter.isConnected = () => true
+      await renderer.handle(ev.processing(true), binding, adapter)
+      jest.advanceTimersByTime(8000)
+      expect(typingCalls(adapter)).toHaveLength(1)
+      // A real replacement generation may start; the old wait must not mask it.
+      await renderer.handle(ev.processing(true, 2), binding, adapter)
+      expect(typingCalls(adapter)).toHaveLength(2)
+    },
+  )
 
   it('stops typing on shutdown (renderer.dispose)', async () => {
     const adapter = makeAdapter()

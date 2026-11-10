@@ -82,6 +82,8 @@ interface RenderState {
   processing: boolean
   /** Telegram progress: once lifecycle events arrive, activity cannot revive a stopped turn. */
   hasProcessingLifecycle: boolean
+  /** Last authoritative turn generation; a reconnect may have lost its stop. */
+  processingGeneration: number | null
   /** Streaming: the message ID being edited (Telegram only). */
   streamingMessageId: string | null
   /** Whether the streaming bubble currently shows a transient retry status. */
@@ -191,6 +193,7 @@ export class Renderer {
         streamingTurnId: null,
         processing: false,
         hasProcessingLifecycle: false,
+        processingGeneration: null,
         streamingMessageId: null,
         streamingRetryPlaceholder: false,
         editTimer: null,
@@ -485,9 +488,19 @@ export class Renderer {
       case 'processing_changed': {
         if (!useTyping) return
         const processing = event.isProcessing === true
-        // A duplicate start must not resume a permission/credential/plan wait.
-        if (state.hasProcessingLifecycle && state.processing === processing) return
+        const generation = typeof event.generation === 'number' ? event.generation : null
+        if (generation !== null && state.processingGeneration !== null) {
+          if (generation < state.processingGeneration) return
+          // A duplicate start must not resume a user wait (or a finished run).
+          if (generation === state.processingGeneration && (processing || !state.processing)) return
+        } else if (state.hasProcessingLifecycle && state.processing === processing) {
+          return // Compatibility with lifecycle producers without generation IDs.
+        }
+        // A newer start can arrive after a disconnect swallowed stop/complete.
+        // Discard that stranded run, including its timer and any unsent text.
+        if (processing && state.processing) this.resetRun(state)
         state.hasProcessingLifecycle = true
+        state.processingGeneration = generation
         state.processing = processing
         if (processing) this.startTyping(state, binding, adapter)
         else this.stopTyping(state)

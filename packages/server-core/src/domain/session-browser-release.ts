@@ -15,10 +15,12 @@ export type BrowserOwnershipReleaser = {
 export async function releaseBrowserOwnershipOnForcedStop(
   source: BrowserOwnershipReleaser | ((sessionId: string) => BrowserOwnershipReleaser | null) | null | undefined,
   sessionId: string,
+  /** A replacement turn may take ownership while visual clearing is in flight. */
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   if (!source) return
   const releaser = typeof source === 'function' ? source(sessionId) : source
   if (!releaser) return
   await releaser.clearVisualsForSession(sessionId)
-  releaser.unbindAllForSession(sessionId)
+  if (isCurrent()) releaser.unbindAllForSession(sessionId)
 }
