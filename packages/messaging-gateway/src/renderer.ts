@@ -19,6 +19,15 @@
  *     On adapters without `messageEditing`, degrades to a single
  *     send-on-complete (identical to `final_only`).
  *
+ *     Telegram exception: instead of posting/editing a status bubble, the
+ *     renderer drives Telegram's native typing indicator (`sendChatAction`)
+ *     while the run is genuinely processing, refreshing it on a timer, and
+ *     stops it on completion / interruption / error / permission wait /
+ *     shutdown. The final answer is sent once as a normal message. There is
+ *     no intermediate-only fallback on this path: a run that produced no
+ *     non-intermediate final text sends nothing (no stranded status bubble).
+ *     Other platforms keep the bubble behaviour above.
+ *
  *   - `final_only`: silent until `complete`, then sends one message with
  *     the accumulated final text. Nothing is sent for empty completions.
  *
@@ -97,10 +106,29 @@ interface RenderState {
   progressMessageId: string | null
   /** Progress: last status label written to the bubble, to avoid redundant edits. */
   progressStatus: string | null
+
+  // --- Telegram native-typing progress ---------------------------------
+  /** Telegram progress: pending typing-refresh timer (null when not typing). */
+  typingTimer: ReturnType<typeof setTimeout> | null
+  /** Telegram progress: whether a typing indicator is currently being refreshed. */
+  typingActive: boolean
+  /**
+   * Monotonic per-binding run counter. Bumped on every reset so a typing
+   * timer scheduled by a finished run can detect it is stale and bail out
+   * instead of resurrecting activity for a run that already ended.
+   */
+  runEpoch: number
 }
 
 const DEFAULT_EDIT_INTERVAL_MS = 3500
 const BACKOFF_RESET_MS = 30_000
+
+/**
+ * Telegram's native typing indicator (`sendChatAction`) expires after ~5s.
+ * Refresh a little under that so the indicator stays continuously visible
+ * during genuinely long work without spamming the Bot API.
+ */
+const TYPING_REFRESH_MS = 4000
 
 const THINKING_LABEL = '💭 thinking…'
 const DISCARDED_RESPONSE_LABEL = '⚠️ Incomplete response discarded.'
@@ -170,6 +198,9 @@ export class Renderer {
         lastAssistantText: '',
         progressMessageId: null,
         progressStatus: null,
+        typingTimer: null,
+        typingActive: false,
+        runEpoch: 0,
       }
       this.states.set(bindingId, state)
     }
@@ -440,10 +471,15 @@ export class Renderer {
     adapter: PlatformAdapter,
   ): Promise<void> {
     const state = this.getState(binding.id)
+    // Telegram uses the native typing indicator instead of a posted status
+    // bubble. Every other platform keeps the evolving-bubble behaviour.
+    const useTyping = binding.platform === 'telegram'
 
     switch (event.type) {
       case 'text_delta':
         // Tokens are not shown in progress mode — we wait for text_complete.
+        // On Telegram, a delta is proof the run is alive, so keep typing on.
+        if (useTyping) this.startTyping(state, binding, adapter)
         return
 
       case 'text_complete': {
@@ -451,20 +487,28 @@ export class Renderer {
         const text = typeof event.text === 'string' ? event.text : ''
         if (text.trim()) {
           if (!isIntermediate) {
-            // Last assistant text of the run — keep it for the final edit.
+            // Last assistant text of the run — keep it for the final send.
             state.finalBuffer = appendFinal(state.finalBuffer, text)
           }
-          // Always remember the latest assistant text so `complete` can fall
-          // back to it if the run never produces a non-intermediate final.
+          // Remembered for non-Telegram fallback only; the Telegram path
+          // deliberately never promotes intermediate narration to a final.
           state.lastAssistantText = text
         }
-        // Intermediate text is dropped from the bubble. Make sure it exists and shows
-        // thinking status so the user knows the run is alive.
-        await this.ensureProgressBubble(state, binding, adapter, THINKING_LABEL)
+        if (useTyping) {
+          this.startTyping(state, binding, adapter)
+        } else {
+          // Intermediate text is dropped from the bubble. Make sure it exists
+          // and shows thinking status so the user knows the run is alive.
+          await this.ensureProgressBubble(state, binding, adapter, THINKING_LABEL)
+        }
         return
       }
 
       case 'tool_start': {
+        if (useTyping) {
+          this.startTyping(state, binding, adapter)
+          return
+        }
         const toolName = typeof event.toolName === 'string' ? event.toolName : 'tool'
         const displayName =
           typeof event.toolDisplayName === 'string' && event.toolDisplayName.length > 0
@@ -475,6 +519,10 @@ export class Renderer {
       }
 
       case 'tool_result': {
+        if (useTyping) {
+          this.startTyping(state, binding, adapter)
+          return
+        }
         // Tool finished — revert the indicator to thinking until the next
         // tool_start or text_complete. Skip if we haven't posted yet (unlikely).
         if (state.progressMessageId) {
@@ -483,7 +531,27 @@ export class Renderer {
         return
       }
 
+      case 'interrupted': {
+        // User stop / abort. resetRun stops the typing indicator and bumps the
+        // run epoch so no late timer or event can resurrect the dead run.
+        this.resetRun(state)
+        return
+      }
+
       case 'complete': {
+        this.stopTyping(state)
+        if (useTyping) {
+          // Strict final output: only a clean non-intermediate final is
+          // delivered. No intermediate-only fallback — a tool-only run sends
+          // nothing rather than stranding a status bubble or leaking
+          // narration. Chunking is handled by sendText().
+          const finalText = state.finalBuffer.trim()
+          if (finalText) {
+            await this.sendText(adapter, binding, finalText)
+          }
+          this.resetRun(state)
+          return
+        }
         // Prefer the clean non-intermediate final; fall back to the last
         // assistant text so a tool-terminated run still delivers a message
         // instead of freezing the bubble on "thinking…".
@@ -508,6 +576,49 @@ export class Renderer {
         this.resetRun(state)
         return
       }
+    }
+  }
+
+  /**
+   * Start (or keep alive) the native typing indicator for a Telegram run.
+   *
+   * Idempotent: while a refresh timer is pending this is a no-op, so a burst
+   * of `text_delta` / `tool_*` events cannot spawn duplicate loops. The timer
+   * captures the current `runEpoch`; if the run is reset before it fires, the
+   * callback sees the mismatch and stops instead of resurrecting a finished
+   * run. `stopTyping` clears the timer on every terminal path.
+   */
+  private startTyping(
+    state: RenderState,
+    binding: ChannelBinding,
+    adapter: PlatformAdapter,
+  ): void {
+    if (state.typingTimer) return
+
+    const epoch = state.runEpoch
+    state.typingActive = true
+    void adapter.sendTyping(binding.channelId, bindingOpts(binding)).catch(() => {})
+
+    state.typingTimer = setTimeout(() => {
+      state.typingTimer = null
+      if (!state.typingActive || state.runEpoch !== epoch) return
+      // The gateway drops session events while an adapter is disconnected, so
+      // a `complete`/`error` may never reach us. Self-terminate the loop within
+      // one refresh interval instead of leaving a dangling timer behind.
+      if (!adapter.isConnected()) {
+        this.stopTyping(state)
+        return
+      }
+      this.startTyping(state, binding, adapter)
+    }, TYPING_REFRESH_MS)
+  }
+
+  /** Stop the typing indicator and cancel any pending refresh timer. */
+  private stopTyping(state: RenderState): void {
+    state.typingActive = false
+    if (state.typingTimer) {
+      clearTimeout(state.typingTimer)
+      state.typingTimer = null
     }
   }
 
@@ -593,6 +704,11 @@ export class Renderer {
   ): Promise<void> {
     const request = event.request as PermissionRequest | undefined
     if (!request?.requestId) return
+
+    // The agent halts while a permission is pending, so it is no longer
+    // "genuinely processing" — stop the Telegram typing indicator. It will
+    // restart on the next activity event once the prompt is resolved.
+    this.stopTyping(state)
 
     // Flush any streaming state first so the prompt lands as a distinct
     // message (progress-mode bubble stays in place as a separate message).
@@ -781,6 +897,9 @@ Approve in the desktop app to continue.`,
   /** Reset per-run state (called on `complete`, `error`, etc.). */
   private resetRun(state: RenderState): void {
     this.cancelEditTimer(state)
+    this.stopTyping(state)
+    // Invalidate any timer scheduled by the run that just ended.
+    state.runEpoch++
     state.textBuffer = ''
     state.streamingTurnId = null
     state.streamingMessageId = null
@@ -818,8 +937,21 @@ Approve in the desktop app to continue.`,
     const state = this.states.get(bindingId)
     if (state) {
       this.cancelEditTimer(state)
+      this.stopTyping(state)
       this.states.delete(bindingId)
     }
+  }
+
+  /**
+   * Stop all per-binding timers (typing refresh, streaming edits). Called on
+   * gateway shutdown so no timer outlives the adapters it would call into.
+   */
+  dispose(): void {
+    for (const state of this.states.values()) {
+      this.cancelEditTimer(state)
+      this.stopTyping(state)
+    }
+    this.states.clear()
   }
 }
 

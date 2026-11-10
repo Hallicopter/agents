@@ -18,6 +18,7 @@ import {
   type AdapterCapabilities,
   type ChannelBinding,
   type PlatformAdapter,
+  type PlatformType,
   type SentMessage,
   type BindingConfig,
   type ResponseMode,
@@ -36,6 +37,7 @@ interface Call {
 
 function makeAdapter(
   capabilities: Partial<AdapterCapabilities> = {},
+  platform: PlatformType = 'telegram',
 ): PlatformAdapter & { calls: Call[] } {
   const calls: Call[] = []
   let nextId = 1
@@ -51,7 +53,7 @@ function makeAdapter(
   }
 
   const adapter: PlatformAdapter & { calls: Call[] } = {
-    platform: 'telegram',
+    platform,
     capabilities: caps,
     calls,
     async initialize() {},
@@ -64,7 +66,7 @@ function makeAdapter(
     async sendText(channelId: string, text: string): Promise<SentMessage> {
       const messageId = String(nextId++)
       calls.push({ kind: 'sendText', channelId, text, messageId })
-      return { platform: 'telegram', channelId, messageId }
+      return { platform, channelId, messageId }
     },
     async editMessage(channelId: string, messageId: string, text: string): Promise<void> {
       calls.push({ kind: 'editMessage', channelId, messageId, text })
@@ -72,14 +74,14 @@ function makeAdapter(
     async sendButtons(channelId: string, text: string): Promise<SentMessage> {
       const messageId = String(nextId++)
       calls.push({ kind: 'sendButtons', channelId, text, messageId })
-      return { platform: 'telegram', channelId, messageId }
+      return { platform, channelId, messageId }
     },
     async sendTyping(channelId: string): Promise<void> {
       calls.push({ kind: 'sendTyping', channelId })
     },
     async sendFile(channelId: string): Promise<SentMessage> {
       const messageId = String(nextId++)
-      return { platform: 'telegram', channelId, messageId }
+      return { platform, channelId, messageId }
     },
   }
 
@@ -90,12 +92,15 @@ function makeAdapter(
 // Fixture helpers
 // ---------------------------------------------------------------------------
 
-function makeBinding(overrides: Partial<BindingConfig> = {}): ChannelBinding {
+function makeBinding(
+  overrides: Partial<BindingConfig> = {},
+  platform: PlatformType = 'telegram',
+): ChannelBinding {
   return {
     id: 'bind-1',
     workspaceId: 'ws-1',
     sessionId: 'sess-1',
-    platform: 'telegram',
+    platform,
     channelId: 'chan-1',
     enabled: true,
     createdAt: Date.now(),
@@ -176,15 +181,15 @@ const ev = {
 // progress mode (default)
 // ---------------------------------------------------------------------------
 
-describe('Renderer — progress mode (default)', () => {
+describe('Renderer — progress mode, non-Telegram (bubble behaviour preserved)', () => {
   let renderer: Renderer
   beforeEach(() => {
     renderer = new Renderer()
   })
 
   it('happy path: tool run → evolving bubble → final text edit', async () => {
-    const adapter = makeAdapter()
-    const binding = makeBinding() // default = progress
+    const adapter = makeAdapter({}, 'lark')
+    const binding = makeBinding({}, 'lark') // default = progress
     await play(renderer, binding, adapter, [
       ev.toolStart('Read'),
       ev.toolResult(),
@@ -203,8 +208,8 @@ describe('Renderer — progress mode (default)', () => {
   })
 
   it('text-only run: one send + one edit with final', async () => {
-    const adapter = makeAdapter()
-    const binding = makeBinding()
+    const adapter = makeAdapter({}, 'lark')
+    const binding = makeBinding({}, 'lark')
     await play(renderer, binding, adapter, [
       ev.delta('hello '),
       ev.delta('world'),
@@ -221,8 +226,8 @@ describe('Renderer — progress mode (default)', () => {
   })
 
   it('drops intermediate text — never appears in any message', async () => {
-    const adapter = makeAdapter()
-    const binding = makeBinding()
+    const adapter = makeAdapter({}, 'lark')
+    const binding = makeBinding({}, 'lark')
     await play(renderer, binding, adapter, [
       ev.intermediate('I am thinking about the question'),
       ev.toolStart('Read'),
@@ -239,8 +244,8 @@ describe('Renderer — progress mode (default)', () => {
   })
 
   it('degrades to single send on complete for adapters without edit support', async () => {
-    const adapter = makeAdapter({ messageEditing: false })
-    const binding = makeBinding()
+    const adapter = makeAdapter({ messageEditing: false }, 'whatsapp')
+    const binding = makeBinding({}, 'whatsapp')
     await play(renderer, binding, adapter, [
       ev.toolStart('Read'),
       ev.toolResult(),
@@ -256,8 +261,8 @@ describe('Renderer — progress mode (default)', () => {
   })
 
   it('tool-terminated run with no non-intermediate final → falls back to last assistant text', async () => {
-    const adapter = makeAdapter()
-    const binding = makeBinding()
+    const adapter = makeAdapter({}, 'lark')
+    const binding = makeBinding({}, 'lark')
     // Automation pattern: agent narrates, calls a tool to deliver its result,
     // and never emits a clean non-intermediate final text_complete.
     await play(renderer, binding, adapter, [
@@ -274,8 +279,8 @@ describe('Renderer — progress mode (default)', () => {
   })
 
   it('still leaves status in place when the run produced no assistant text at all', async () => {
-    const adapter = makeAdapter()
-    const binding = makeBinding()
+    const adapter = makeAdapter({}, 'lark')
+    const binding = makeBinding({}, 'lark')
     await play(renderer, binding, adapter, [
       ev.toolStart('Read'),
       ev.toolResult(),
@@ -289,8 +294,8 @@ describe('Renderer — progress mode (default)', () => {
   })
 
   it('collapses redundant status edits (same status twice = one edit total)', async () => {
-    const adapter = makeAdapter()
-    const binding = makeBinding()
+    const adapter = makeAdapter({}, 'lark')
+    const binding = makeBinding({}, 'lark')
     await play(renderer, binding, adapter, [
       ev.toolStart('Read'),
       ev.toolResult(),
@@ -304,6 +309,221 @@ describe('Renderer — progress mode (default)', () => {
     expect(edits.length).toBe(2)
     expect(edits[0]!.text).toBe('💭 thinking…')
     expect(edits[1]!.text).toBe('done')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// progress mode — Telegram native typing (no posted status bubbles)
+// ---------------------------------------------------------------------------
+
+describe('Renderer — progress mode, Telegram native typing', () => {
+  let renderer: Renderer
+  beforeEach(() => {
+    jest.useFakeTimers()
+    renderer = new Renderer()
+  })
+  afterEach(() => {
+    jest.clearAllTimers()
+    jest.useRealTimers()
+  })
+
+  const typingCalls = (adapter: ReturnType<typeof makeAdapter>) =>
+    adapter.calls.filter((c) => c.kind === 'sendTyping')
+  const textCalls = (adapter: ReturnType<typeof makeAdapter>) =>
+    adapter.calls.filter((c) => c.kind === 'sendText' || c.kind === 'editMessage')
+
+  it('tool-only run: no status bubble, no final send, typing started then stopped', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [
+      ev.toolStart('Read'),
+      ev.toolResult(),
+      ev.complete(),
+    ])
+
+    // No posted message or edit at all — the whole point of the patch.
+    expect(textCalls(adapter)).toHaveLength(0)
+    // Typing was shown while processing.
+    expect(typingCalls(adapter).length).toBeGreaterThanOrEqual(1)
+
+    // After completion, no further typing refreshes fire.
+    const before = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(before)
+  })
+
+  it('intermediate-only run: no sendText, no edits (no intermediate fallback)', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [
+      ev.intermediate('Sending the report now.'),
+      ev.toolStart('SendTelegram'),
+      ev.toolResult(),
+      ev.complete(),
+    ])
+
+    expect(textCalls(adapter)).toHaveLength(0)
+  })
+
+  it('final answer delivered exactly once, no status bubble', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [
+      ev.toolStart('Read'),
+      ev.toolResult(),
+      ev.final('The answer is 42.'),
+      ev.complete(),
+    ])
+
+    const sends = adapter.calls.filter((c) => c.kind === 'sendText')
+    const edits = adapter.calls.filter((c) => c.kind === 'editMessage')
+    expect(edits).toHaveLength(0)
+    expect(sends).toHaveLength(1)
+    expect(sends[0]!.text).toBe('The answer is 42.')
+  })
+
+  it('long work: typing refreshes on a bounded cadence while processing', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.toolStart('Read')])
+    expect(typingCalls(adapter)).toHaveLength(1)
+
+    jest.advanceTimersByTime(4000)
+    expect(typingCalls(adapter)).toHaveLength(2)
+    jest.advanceTimersByTime(4000)
+    expect(typingCalls(adapter)).toHaveLength(3)
+
+    await play(renderer, binding, adapter, [ev.complete()])
+    const afterComplete = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterComplete)
+  })
+
+  it('repeated activity events do not spawn duplicate typing loops', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [
+      ev.toolStart('Read'),
+      ev.toolStart('Read'),
+      ev.toolResult(),
+      ev.delta('x'),
+    ])
+    // Only the first event starts typing; the rest are no-ops while the timer
+    // is pending.
+    expect(typingCalls(adapter)).toHaveLength(1)
+
+    jest.advanceTimersByTime(4000)
+    // Exactly one refresh, not one per event.
+    expect(typingCalls(adapter)).toHaveLength(2)
+  })
+
+  it('stops typing on interruption and does not resurrect it', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.toolStart('Read')])
+    expect(typingCalls(adapter)).toHaveLength(1)
+
+    await play(renderer, binding, adapter, [{ type: 'interrupted', sessionId: 's' }])
+    const afterStop = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterStop)
+    // No message posted for a user-initiated stop.
+    expect(textCalls(adapter)).toHaveLength(0)
+  })
+
+  it('stops typing on error and still surfaces the error message', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [
+      ev.toolStart('Read'),
+      { type: 'error', sessionId: 's', error: 'boom' } as SessionEvent,
+    ])
+
+    const afterError = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterError)
+
+    const sends = adapter.calls.filter((c) => c.kind === 'sendText')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]!.text).toContain('❌')
+    expect(sends[0]!.text).toContain('boom')
+  })
+
+  it('stops typing while a permission prompt is pending, then resumes on activity', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding({ approvalChannel: 'chat' })
+    await play(renderer, binding, adapter, [ev.toolStart('Read')])
+    expect(typingCalls(adapter)).toHaveLength(1)
+
+    await renderer.handle(
+      {
+        type: 'permission_request',
+        sessionId: 's',
+        request: { requestId: 'r1', toolName: 'bash', description: 'run tests' },
+      } as SessionEvent,
+      binding,
+      adapter,
+    )
+    const afterPrompt = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterPrompt)
+    // Permission prompt itself is preserved.
+    expect(adapter.calls.filter((c) => c.kind === 'sendButtons')).toHaveLength(1)
+
+    // Agent resumes after approval → typing restarts.
+    await play(renderer, binding, adapter, [ev.toolResult()])
+    expect(typingCalls(adapter).length).toBe(afterPrompt + 1)
+  })
+
+  it('self-terminates the typing loop when the adapter disconnects', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.toolStart('Read')])
+    expect(typingCalls(adapter)).toHaveLength(1)
+
+    // Simulate a mid-run disconnect: the gateway would now drop the eventual
+    // `complete`, so the loop must stop on its own.
+    adapter.isConnected = () => false
+    jest.advanceTimersByTime(4000)
+    const afterDisconnect = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterDisconnect)
+  })
+
+  it('stops typing on shutdown (renderer.dispose)', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.toolStart('Read')])
+    expect(typingCalls(adapter)).toHaveLength(1)
+
+    renderer.dispose()
+    const afterDispose = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterDispose)
+  })
+
+  it('chunks a long final answer across multiple sends', async () => {
+    const adapter = makeAdapter({ maxMessageLength: 50 })
+    const binding = makeBinding()
+    const long = Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n')
+    await play(renderer, binding, adapter, [ev.final(long), ev.complete()])
+
+    const sends = adapter.calls.filter((c) => c.kind === 'sendText')
+    expect(sends.length).toBeGreaterThan(1)
+    expect(sends.map((s) => s.text).join('\n')).toContain('line 19')
+  })
+
+  it('a late timer from a finished run cannot resurrect typing', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.toolStart('Read')])
+    // Complete the run (clears the timer + bumps epoch).
+    await play(renderer, binding, adapter, [ev.final('done'), ev.complete()])
+    const afterComplete = typingCalls(adapter).length
+
+    // Any in-flight tick must be inert.
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterComplete)
   })
 })
 
@@ -643,8 +863,8 @@ describe('Renderer — permissions and errors', () => {
 
   it('error event emits ❌ message and resets state', async () => {
     const renderer = new Renderer()
-    const adapter = makeAdapter()
-    const binding = makeBinding()
+    const adapter = makeAdapter({}, 'lark')
+    const binding = makeBinding({}, 'lark')
     await play(renderer, binding, adapter, [
       ev.toolStart('Read'),
       { type: 'error', sessionId: 's', error: 'boom' } as SessionEvent,

@@ -296,6 +296,10 @@ export class MessagingGateway {
     if (!this.started) return
     this.started = false
 
+    // Stop renderer timers (typing refresh, streaming edits) before tearing
+    // down adapters so no timer fires against a destroyed adapter.
+    this.renderer.dispose()
+
     for (const [platform, adapter] of this.adapters) {
       try {
         await adapter.destroy()

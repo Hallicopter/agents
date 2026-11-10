@@ -240,7 +240,9 @@ export interface PlatformAdapter {
  * - `progress` — one evolving message per run. Posts a "💭 thinking…"
  *   bubble on first activity, edits it as tools run, replaces it with
  *   the final answer on `complete`. Intermediate assistant text is
- *   dropped. Default for new bindings.
+ *   dropped. Default for new bindings. On Telegram this instead drives
+ *   the native typing indicator (no posted status bubble) and sends only
+ *   the final answer, with no intermediate-only fallback.
  * - `final_only` — silent until `complete`, then one message with the
  *   final text. Nothing is posted if the run has no final text.
  */
