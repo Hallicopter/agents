@@ -475,6 +475,79 @@ describe('Renderer — progress mode, Telegram native typing', () => {
     expect(typingCalls(adapter).length).toBe(afterPrompt + 1)
   })
 
+  it('stops typing while a credential request is pending', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.toolStart('Read')])
+    expect(typingCalls(adapter)).toHaveLength(1)
+
+    await renderer.handle(
+      {
+        type: 'credential_request',
+        sessionId: 's',
+        request: { requestId: 'c1' },
+      } as SessionEvent,
+      binding,
+      adapter,
+    )
+    const afterPrompt = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterPrompt)
+  })
+
+  it('stops typing while a plan is awaiting review, then resumes on activity', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+    await play(renderer, binding, adapter, [ev.toolStart('Read')])
+    expect(typingCalls(adapter)).toHaveLength(1)
+
+    await renderer.handle(
+      {
+        type: 'plan_submitted',
+        sessionId: 's',
+        message: { id: 'm1', role: 'assistant', content: 'Plan' },
+      } as SessionEvent,
+      binding,
+      adapter,
+    )
+    const afterPlan = typingCalls(adapter).length
+    jest.advanceTimersByTime(20_000)
+    expect(typingCalls(adapter).length).toBe(afterPlan)
+    // The plan notice itself is still delivered.
+    expect(adapter.calls.filter((c) => c.kind === 'sendText').length).toBeGreaterThanOrEqual(1)
+
+    // Agent resumes after the plan is accepted → typing restarts.
+    await play(renderer, binding, adapter, [ev.toolResult()])
+    expect(typingCalls(adapter).length).toBe(afterPlan + 1)
+  })
+
+  it('concurrent complete events deliver the final exactly once (deferred send)', async () => {
+    const adapter = makeAdapter()
+    const binding = makeBinding()
+
+    const sent: string[] = []
+    let release: (() => void) | null = null
+    adapter.sendText = (channelId: string, text: string) => {
+      sent.push(text)
+      return new Promise<SentMessage>((resolve) => {
+        release = () => resolve({ platform: 'telegram', channelId, messageId: 'm1' })
+      })
+    }
+
+    // Accumulate the final, then fire two completes without awaiting the first
+    // (mirrors the gateway's `void renderer.handle(...)` dispatch).
+    await renderer.handle(ev.final('answer'), binding, adapter)
+    const first = renderer.handle(ev.complete(), binding, adapter)
+    const second = renderer.handle(ev.complete(), binding, adapter)
+
+    // Only the first complete starts a send; the second sees an empty buffer.
+    expect(sent).toEqual(['answer'])
+
+    release?.()
+    await Promise.all([first, second])
+    expect(sent).toEqual(['answer'])
+  })
+
   it('self-terminates the typing loop when the adapter disconnects', async () => {
     const adapter = makeAdapter()
     const binding = makeBinding()

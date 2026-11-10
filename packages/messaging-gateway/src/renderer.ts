@@ -220,10 +220,14 @@ export class Renderer {
       return
     }
     if (event.type === 'credential_request') {
+      // The agent is waiting on the user, not processing — stop typing.
+      this.stopTyping(this.getState(binding.id))
       await this.handleCredentialRequest(binding, adapter)
       return
     }
     if (event.type === 'plan_submitted') {
+      // Plan review is a user-wait state — stop typing until the agent resumes.
+      this.stopTyping(this.getState(binding.id))
       await this.handlePlanSubmitted(event, binding, adapter)
       return
     }
@@ -533,25 +537,31 @@ export class Renderer {
 
       case 'interrupted': {
         // User stop / abort. resetRun stops the typing indicator and bumps the
-        // run epoch so no late timer or event can resurrect the dead run.
+        // run epoch so a late typing timer from this run cannot fire.
         this.resetRun(state)
         return
       }
 
       case 'complete': {
-        this.stopTyping(state)
         if (useTyping) {
           // Strict final output: only a clean non-intermediate final is
           // delivered. No intermediate-only fallback — a tool-only run sends
           // nothing rather than stranding a status bubble or leaking
           // narration. Chunking is handled by sendText().
+          //
+          // Snapshot the final and reset BEFORE awaiting the send. The gateway
+          // dispatches renderer.handle() without awaiting, so a second
+          // `complete` can run while this send is in flight; resetting first
+          // means it sees an empty buffer (no duplicate final) and cannot
+          // clobber a newer run's state.
           const finalText = state.finalBuffer.trim()
+          this.resetRun(state)
           if (finalText) {
             await this.sendText(adapter, binding, finalText)
           }
-          this.resetRun(state)
           return
         }
+        this.stopTyping(state)
         // Prefer the clean non-intermediate final; fall back to the last
         // assistant text so a tool-terminated run still delivers a message
         // instead of freezing the bubble on "thinking…".
