@@ -47,7 +47,6 @@ import {
   loadedSessionsAtom,
   forceSessionMessagesReloadAtom,
   backgroundTasksAtomFamily,
-  extractSessionMeta,
   windowWorkspaceIdAtom,
   type SessionMeta,
   type BackgroundTask,
@@ -1044,15 +1043,8 @@ function MainApp() {
         // Handle background task events
         handleBackgroundTaskEvent(store, sessionId, event, agentEvent)
 
-        // For handoff events, update metadata map for list display
-        // NOTE: No sessionsAtom to sync - atom and metadata are the source of truth
+        // updateSessionDirect already publishes changed list metadata once.
         if (isHandoff) {
-          // Update metadata map
-          const metaMap = store.get(sessionMetaMapAtom)
-          const newMetaMap = new Map(metaMap)
-          newMetaMap.set(sessionId, extractSessionMeta(updatedSession))
-          store.set(sessionMetaMapAtom, newMetaMap)
-
           // Show notification on complete (when window is not focused)
           // Skip hidden sessions (mini-agent sessions) - they shouldn't trigger notifications
           if (event.type === 'complete' && !updatedSession.hidden) {
@@ -1100,14 +1092,8 @@ function MainApp() {
       // Handle background task events
       handleBackgroundTaskEvent(store, sessionId, event, agentEvent)
 
-      // Update per-session atom
+      // Update transcript and changed list metadata in one atom transaction.
       updateSessionDirect(sessionId, () => updatedSession)
-
-      // Update metadata map
-      const metaMap = store.get(sessionMetaMapAtom)
-      const newMetaMap = new Map(metaMap)
-      newMetaMap.set(sessionId, extractSessionMeta(updatedSession))
-      store.set(sessionMetaMapAtom, newMetaMap)
     })
 
     return cleanup

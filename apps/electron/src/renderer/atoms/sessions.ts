@@ -188,8 +188,21 @@ export const activeSessionIdAtom = atom<string | null>(null)
 // - addSessionAtom, removeSessionAtom for individual operations
 
 /**
+ * Compare every extracted field, including fields added to Session in the future.
+ * Session updates are immutable: unchanged nested metadata retains its identity.
+ * New array/object references conservatively publish, even if value-equivalent.
+ */
+function sameSessionMeta(previous: SessionMeta | undefined, next: SessionMeta): boolean {
+  if (!previous) return false
+  const keys = Object.keys(next) as (keyof SessionMeta)[]
+  return Object.keys(previous).length === keys.length && keys.every(key =>
+    Object.prototype.hasOwnProperty.call(previous, key) && Object.is(previous[key], next[key])
+  )
+}
+
+/**
  * Action atom: update a single session
- * Only triggers re-render in components subscribed to this specific session
+ * Always updates the transcript; only invalidates the workspace list if metadata changed.
  */
 export const updateSessionAtom = atom(
   null,
@@ -199,12 +212,17 @@ export const updateSessionAtom = atom(
     const newSession = updater(currentSession)
     set(sessionAtom, newSession)
 
-    // Also update metadata if session exists
+    // Streaming text/tool details must not clone the workspace-wide map or
+    // invalidate AppShell's filters. Still publish all meaningful metadata
+    // changes immediately (processing, unread, counts, titles, labels, etc.).
     if (newSession) {
       const metaMap = get(sessionMetaMapAtom)
-      const newMetaMap = new Map(metaMap)
-      newMetaMap.set(sessionId, extractSessionMeta(newSession))
-      set(sessionMetaMapAtom, newMetaMap)
+      const nextMeta = extractSessionMeta(newSession)
+      if (!sameSessionMeta(metaMap.get(sessionId), nextMeta)) {
+        const newMetaMap = new Map(metaMap)
+        newMetaMap.set(sessionId, nextMeta)
+        set(sessionMetaMapAtom, newMetaMap)
+      }
     }
   }
 )
