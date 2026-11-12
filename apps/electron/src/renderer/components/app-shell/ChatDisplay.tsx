@@ -36,6 +36,7 @@ import type { ThinkingLevel } from "@craft-agent/shared/agent/thinking-levels"
 import {
   TurnCard,
   groupMessagesByTurn,
+  reuseUnchangedTurns,
   formatTurnAsMarkdown,
   formatActivityAsMarkdown,
   getAssistantTurnUiKey,
@@ -1299,11 +1300,21 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     return undefined
   }, [pendingPermission, pendingCredential])
 
-  // Memoize turn grouping - avoids O(n) iteration on every render/keystroke
+  // Keep only this panel's latest derived transcript. Grouping still handles
+  // every message/edit; structural sharing keeps unchanged completed cards out
+  // of the streaming render path. Never reuse across different sessions.
+  const previousTurnsRef = React.useRef<{ sessionId: string; turns: Turn[] } | null>(null)
   const allTurns = React.useMemo(() => {
-    if (!session) return []
-    return groupMessagesByTurn(session.messages, { isSessionProcessing: session.isProcessing })
-  }, [session?.messages, session?.isProcessing])
+    if (!session) {
+      previousTurnsRef.current = null
+      return []
+    }
+    const grouped = groupMessagesByTurn(session.messages, { isSessionProcessing: session.isProcessing })
+    const previous = previousTurnsRef.current
+    const turns = reuseUnchangedTurns(previous?.sessionId === session.id ? previous.turns : [], grouped)
+    previousTurnsRef.current = { sessionId: session.id, turns }
+    return turns
+  }, [session?.id, session?.messages, session?.isProcessing])
 
   // Keep ref in sync for scroll handler
   totalTurnCountRef.current = allTurns.length

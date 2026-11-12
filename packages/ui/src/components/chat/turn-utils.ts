@@ -10,6 +10,7 @@ import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { storedToMessage } from '@craft-agent/core'
 
 export { storedToMessage }
+export { reuseUnchangedTurns } from './turn-sharing'
 import type { ActivityItem, ActivityStatus, ActivityType, ResponseContent, TodoItem } from './TurnCard'
 
 // Re-export ActivityItem for consumers

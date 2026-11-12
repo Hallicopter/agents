@@ -5,3 +5,7 @@
 Incoming envelopes use the actual thinking/tool `WorkLogDisclosure` and `WorkLogHeader`. The whole raw body and all attachments belong inside it, never a surrounding user bubble or collapsed body excerpt. Copy uses the exact original content. Use stable message identity, not content as a React key, so live updates retain expansion. Expanded raw text must not be hidden by context badge substitution.
 
 `WorkLogDisclosure` is shared with `WorkLog`, but only tool logs opt out of transcript search. Keep header keyboard, focus, light/dark and compact behavior unified. Attachment previews are keyboard-operable buttons. Browser integration fixtures verify live and historical transcript paths with synthetic data.
+
+# Completed turn structural sharing
+
+`reuseUnchangedTurns` compares all derived fields and only reuses complete, non-streaming assistant turns. `ChatDisplay` keeps one latest per-panel result and resets across session identities; do not add global history/ID-only caches. Completed text, annotations, tool output, todos, retractions and future fields must still invalidate. Active turns always stay fresh. Tests: `bun test packages/ui/src/components/chat/__tests__/turn-sharing.test.ts`.
