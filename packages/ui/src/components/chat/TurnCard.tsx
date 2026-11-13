@@ -17,6 +17,7 @@ import {
   buildSelectionEntryTransition,
 } from '../annotations/island-motion'
 import { TurnCardActionsMenu } from './TurnCardActionsMenu'
+import { createTurnActionBridge, TURN_ACTION_KEYS, type TurnActionKey } from './turn-action-bridge'
 import { computeLastChildSet, groupActivitiesByParent, deriveTurnPhase, shouldShowThinkingIndicator, type AssistantTurn } from './turn-utils'
 import { extractAnnotationSelectedText } from './follow-up-helpers'
 import {
@@ -1519,7 +1520,20 @@ export function ResponseCard({
  * Memoized to prevent re-renders of completed turns during session switches.
  * Only complete, non-streaming turns are memoized - active turns always re-render.
  */
-export const TurnCard = React.memo(function TurnCard({
+// The small outer bridge receives fresh props even when the heavy historical
+// card bails out. Only committed callbacks are published; rendered content and
+// per-card UI state stay behind the existing memo boundary.
+const useCommittedLayoutEffect = typeof window === 'undefined' ? useEffect : React.useLayoutEffect
+export function TurnCard(props: TurnCardProps) {
+  const committed = useRef<TurnCardProps | null>(props)
+  useCommittedLayoutEffect(() => { committed.current = props }, [props])
+  useCommittedLayoutEffect(() => () => { committed.current = null }, [])
+  const bridge = useMemo(() => createTurnActionBridge(() => committed.current), [])
+  const actions = Object.fromEntries(TURN_ACTION_KEYS.map(key => [key, props[key] ? bridge[key] : undefined])) as Pick<TurnCardProps, TurnActionKey>
+  return <MemoizedTurnCard {...props} {...actions} />
+}
+
+const MemoizedTurnCard = React.memo(function TurnCard({
   sessionId,
   turnId,
   activities,
@@ -1844,6 +1858,17 @@ export const TurnCard = React.memo(function TurnCard({
 
   // Always re-render incomplete turns
   if (!prev.isComplete || !next.isComplete) return false
+
+  // Capability presence and visible/interaction primitives are semantic, not
+  // callback identities. The bridge supplies freshness without historical
+  // Markdown renders on every stream tick.
+  if (TURN_ACTION_KEYS.some(key => !!prev[key] !== !!next[key])) return false
+  if (prev.sendMessageKey !== next.sendMessageKey) return false
+  if (prev.sessionFolderPath !== next.sessionFolderPath) return false
+  if (prev.intent !== next.intent || prev.todos !== next.todos) return false
+  if (prev.hasEditOrWriteActivities !== next.hasEditOrWriteActivities) return false
+  if (prev.renderActionsMenu !== next.renderActionsMenu) return false
+  if (prev.animateResponse !== next.animateResponse || prev.defaultExpanded !== next.defaultExpanded) return false
 
   // Re-render if expansion state changed
   if (prev.isExpanded !== next.isExpanded) return false

@@ -9,12 +9,15 @@ interface Props<T> {
   renderHeader: (group: EntityListGroup<T>) => React.ReactNode
   viewportRef: React.RefObject<HTMLDivElement>
   pinnedKeys: readonly string[]
+  enabled: boolean
 }
 
 /** Only used by exceptionally large paged session lists. Keeps existing group
  * containers/headers and the complete logical navigation model. Heights are
  * measured, not fixed; sparse pinned keyboard/menu rows retain their real place. */
-export function WindowedEntityGroups<T>({ groups, getKey, renderItem, renderHeader, viewportRef, pinnedKeys }: Props<T>) {
+export function WindowedEntityGroups<T>({ groups, getKey, renderItem, renderHeader, viewportRef, pinnedKeys, enabled }: Props<T>) {
+  const enabledRef = React.useRef(enabled)
+  React.useLayoutEffect(() => { enabledRef.current = enabled }, [enabled])
   const root = React.useRef<HTMLDivElement>(null)
   const sizes = React.useRef(new Map<string, number>())
   const elements = React.useRef(new Map<string, HTMLElement>())
@@ -25,10 +28,10 @@ export function WindowedEntityGroups<T>({ groups, getKey, renderItem, renderHead
   const [view, setView] = React.useState({ top: 0, height: 800, width: 0, offset: 0 })
   const [retainedKey, setRetainedKey] = React.useState<string | null>(null)
   const previousLayout = React.useRef<WindowLayout | null>(null)
+  const previousEnabled = React.useRef(enabled)
   const lastView = React.useRef(view)
-  const model = React.useMemo(() => layoutWindowedGroups(
-    groups.map(group => ({ key: group.key, rowKeys: group.items.map(getKey) })), sizes.current,
-  ), [groups, getKey, revision])
+  const inputs = React.useMemo(() => groups.map(group => ({ key: group.key, rowKeys: group.items.map(getKey) })), [groups, getKey])
+  const model = React.useMemo(() => layoutWindowedGroups(inputs, sizes.current), [inputs, revision, enabled])
 
   const readViewport = React.useCallback(() => {
     const viewport = viewportRef.current
@@ -37,6 +40,7 @@ export function WindowedEntityGroups<T>({ groups, getKey, renderItem, renderHead
     const next = { top: viewport.scrollTop, height: viewport.clientHeight, width: viewport.clientWidth,
       offset: content.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop }
     lastView.current = next
+    if (!enabledRef.current) return // ordinary scrolling must not re-render all rows
     setView(old => old.top === next.top && old.height === next.height && old.width === next.width && Math.abs(old.offset - next.offset) < 0.5 ? old : next)
   }, [viewportRef])
 
@@ -46,7 +50,7 @@ export function WindowedEntityGroups<T>({ groups, getKey, renderItem, renderHead
       sizes.current.set(key, size)
       if (!measurementFrame.current) measurementFrame.current = requestAnimationFrame(() => {
         measurementFrame.current = 0
-        setRevision(n => n + 1)
+        if (enabledRef.current) setRevision(n => n + 1)
       })
     }
   }, [])
@@ -104,19 +108,25 @@ export function WindowedEntityGroups<T>({ groups, getKey, renderItem, renderHead
     const viewport = viewportRef.current
     const previous = previousLayout.current
     const snapshot = lastView.current
+    // Newly mounted full rows have measured refs before this effect. On the
+    // window -> full transition use those actual heights, not old estimates.
+    const next = previousEnabled.current && !enabled ? layoutWindowedGroups(inputs, sizes.current) : model
     // Hold the first visible row steady when measured heights or rows ABOVE it
     // change. At the top allow new activity/reorders to appear naturally.
-    if (viewport && previous && snapshot.top > snapshot.offset + 1) {
-      const delta = anchorShift(previous, model, snapshot.top - snapshot.offset)
-      if (Math.abs(delta) > 0.5) viewport.scrollTop += delta
+    if ((enabled || previousEnabled.current) && viewport && previous && snapshot.top > snapshot.offset + 1) {
+      const delta = anchorShift(previous, next, snapshot.top - snapshot.offset)
+      // Native layout may ALREADY clamp scrollTop when the extent shrinks.
+      // Restore the snapshot's target, not a delta on the clamped position.
+      if (Math.abs(delta) > 0.5) viewport.scrollTop = snapshot.top + delta
     }
-    previousLayout.current = model
+    previousLayout.current = next
+    previousEnabled.current = enabled
     readViewport()
     const valid = new Set(model.rows.map(row => rowMeasureKey(row.key)))
     for (const group of model.groups) valid.add(headerMeasureKey(group.key))
     for (const key of sizes.current.keys()) if (!valid.has(key)) sizes.current.delete(key)
     for (const key of callbacks.current.keys()) if (!valid.has(key)) callbacks.current.delete(key)
-  }, [model, readViewport, viewportRef])
+  }, [model, inputs, readViewport, viewportRef, enabled])
 
   const pinned = new Set(pinnedKeys)
   if (retainedKey) pinned.add(retainedKey)
@@ -125,11 +135,13 @@ export function WindowedEntityGroups<T>({ groups, getKey, renderItem, renderHead
     if (row) setRetainedKey(row.dataset.windowRowKey ?? null)
   }
 
-  return <div ref={root} style={{ overflowAnchor: 'none' }} data-windowed-list="true"
+  // Keep the same keyed row/header boundary below the threshold too. Switching
+  // only visibility preserves local menu/focus state at 200 <-> 201 rows.
+  return <div ref={root} style={{ overflowAnchor: enabled ? 'none' : undefined }} data-windowed-list={enabled ? 'true' : undefined}
     onFocusCapture={retainAnchor} onPointerDownCapture={retainAnchor}>
     {model.groups.map((groupLayout, groupIndex) => {
       const group = groups[groupIndex]
-      const visible = visibleWindowRows(groupLayout, view.top - view.offset, view.height, pinned)
+      const visible = enabled ? visibleWindowRows(groupLayout, view.top - view.offset, view.height, pinned) : groupLayout.rows
       const children: React.ReactNode[] = []
       let cursor = groupLayout.start + groupLayout.headerSize
       for (const row of visible) {

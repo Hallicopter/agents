@@ -64,7 +64,7 @@ export interface EntityListProps<T> {
   viewportRef?: React.RefObject<HTMLDivElement>
   /** Opt-in measured-height row windowing (requires groups + viewportRef).
    * Consumers keep full logical rows for keyboard navigation and selection. */
-  windowing?: { pinnedKeys: readonly string[] }
+  windowing?: { enabled: boolean; pinnedKeys: readonly string[] }
   /** Additional ScrollArea class */
   scrollAreaClassName?: string
   className?: string
@@ -217,7 +217,7 @@ export function EntityList<T>({
           <div className="pt-1">
             {hasGroups && windowing && viewportRef
               ? <WindowedEntityGroups groups={groups!} getKey={getKey} renderItem={renderItem}
-                  renderHeader={renderGroupHeader} viewportRef={viewportRef} pinnedKeys={windowing.pinnedKeys} />
+                  renderHeader={renderGroupHeader} viewportRef={viewportRef} pinnedKeys={windowing.pinnedKeys} enabled={windowing.enabled} />
               : hasGroups ? groups!.map((group, groupIndex) => {
                   return (
                     <div key={group.key} className={groupIndex > 0 ? GROUP_GAP : undefined}>
