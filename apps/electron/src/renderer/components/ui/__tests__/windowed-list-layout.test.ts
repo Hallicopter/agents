@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { anchorShift, headerMeasureKey, layoutWindowedGroups, rowMeasureKey, visibleWindowRows, windowAnchor } from '../windowed-list-layout'
+import { anchorShift, headerMeasureKey, layoutWindowedGroups, rowMeasureKey, refreshMeasuredLayout, visibleWindowRows, windowAnchor } from '../windowed-list-layout'
 
 const input = (count: number) => [{ key: 'today', rowKeys: Array.from({ length: count }, (_, n) => `s-${n}`) }]
 describe('exceptional session-list measured window layout', () => {
@@ -39,6 +39,19 @@ describe('exceptional session-list measured window layout', () => {
     const reordered = layoutWindowedGroups([{ key: 'today', rowKeys: ['new', ...input(1000)[0].rowKeys] }], new Map())
     expect(anchorShift(before, reordered, 1000)).toBe(56)
     expect(anchorShift(before, layoutWindowedGroups([], new Map()), 1000)).toBe(0)
+  })
+  it('refreshes inactive estimated snapshots before scrolled200 -> 201 activation', () => {
+    const stale = layoutWindowedGroups(input(200), new Map())
+    const sizes = new Map(input(200)[0].rowKeys.map(key => [rowMeasureKey(key), 36]))
+    const next = layoutWindowedGroups(input(201), sizes)
+    // Nothing above the viewport changed. Choosing from a stale estimated
+    // model incorrectly subtracts1060px even though the full DOM was measured.
+    expect(anchorShift(stale, next, 3000)).toBe(-1060)
+    const actualPrevious = refreshMeasuredLayout(stale, sizes)
+    expect(actualPrevious.rows.map(row => row.key)).toEqual(stale.rows.map(row => row.key))
+    expect(anchorShift(actualPrevious, next, 3000)).toBe(0)
+    expect(anchorShift(actualPrevious, next, actualPrevious.size - 800)).toBe(0)
+    expect(anchorShift(next, actualPrevious, 3000)).toBe(0)
   })
   it('preserves exact row coordinates through group collapse, search regrouping and hierarchy flattening', () => {
     const before = layoutWindowedGroups([{ key: 'a', rowKeys: ['parent', 'child-1', 'child-2'] }, { key: 'b', rowKeys: ['other'] }], new Map())

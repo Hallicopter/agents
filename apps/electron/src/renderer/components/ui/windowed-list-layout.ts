@@ -26,6 +26,12 @@ export function layoutWindowedGroups(groups: WindowGroupInput[], sizes: Readonly
   return { groups: result, rows, byKey, size: offset }
 }
 
+/** Full (inactive) mode measures without revision renders. Refresh its OLD
+ * logical order from those measured sizes before choosing an activation anchor. */
+export function refreshMeasuredLayout(previous: WindowLayout, sizes: ReadonlyMap<string, number>): WindowLayout {
+  return layoutWindowedGroups(previous.groups.map(group => ({ key: group.key, rowKeys: group.rows.map(row => row.key) })), sizes)
+}
+
 /** Include pinned keyboard/selection/menu anchors even outside the viewport.
  * Sparse indices are rendered with sized gaps, not concatenated at the top. */
 export function visibleWindowRows(group: WindowGroup, top: number, height: number, pinned: ReadonlySet<string>, overscan = 240): WindowRow[] {

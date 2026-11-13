@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { EntityListGroup } from './entity-list'
-import { anchorShift, headerMeasureKey, layoutWindowedGroups, rowMeasureKey, visibleWindowRows, type WindowLayout } from './windowed-list-layout'
+import { anchorShift, headerMeasureKey, layoutWindowedGroups, rowMeasureKey, refreshMeasuredLayout, visibleWindowRows, type WindowLayout } from './windowed-list-layout'
 
 interface Props<T> {
   groups: EntityListGroup<T>[]
@@ -106,7 +106,12 @@ export function WindowedEntityGroups<T>({ groups, getKey, renderItem, renderHead
 
   React.useLayoutEffect(() => {
     const viewport = viewportRef.current
-    const previous = previousLayout.current
+    const savedLayout = previousLayout.current
+    // Inactive mode deliberately avoids measurement revision renders. Its last
+    // React model can still contain estimates: refresh the PREVIOUS keys/order
+    // from full-DOM measurements before selecting an activation anchor.
+    const previous = enabled && !previousEnabled.current && savedLayout
+      ? refreshMeasuredLayout(savedLayout, sizes.current) : savedLayout
     const snapshot = lastView.current
     // Newly mounted full rows have measured refs before this effect. On the
     // window -> full transition use those actual heights, not old estimates.
