@@ -22,6 +22,7 @@ import {
   StyledContextMenuSeparator,
 } from '@/components/ui/styled-context-menu'
 import { cn } from '@/lib/utils'
+import { WindowedEntityGroups } from './windowed-entity-groups'
 
 // ============================================================================
 // Types
@@ -61,6 +62,9 @@ export interface EntityListProps<T> {
   containerProps?: Record<string, string>
   /** Ref to the ScrollArea viewport element (for scroll-based pagination) */
   viewportRef?: React.RefObject<HTMLDivElement>
+  /** Opt-in measured-height row windowing (requires groups + viewportRef).
+   * Consumers keep full logical rows for keyboard navigation and selection. */
+  windowing?: { pinnedKeys: readonly string[] }
   /** Additional ScrollArea class */
   scrollAreaClassName?: string
   className?: string
@@ -175,6 +179,7 @@ export function EntityList<T>({
   onToggleCollapse,
   onCollapseAll,
   onExpandAll,
+  windowing,
 }: EntityListProps<T>) {
   // Determine if we have content
   const hasGroups = groups && groups.length > 0
@@ -191,6 +196,15 @@ export function EntityList<T>({
     )
   }
 
+  const renderGroupHeader = (group: EntityListGroup<T>) => {
+    const isCollapsed = !!(group.collapsible && collapsedGroups?.has(group.key))
+    return group.collapsible && onToggleCollapse ? (
+      <CollapsibleGroupHeader label={group.label} isCollapsed={isCollapsed}
+        itemCount={isCollapsed ? (group.collapsedCount ?? 0) : group.items.length}
+        onToggle={() => onToggleCollapse(group.key)} onCollapseAll={onCollapseAll} onExpandAll={onExpandAll} />
+    ) : <SectionHeader label={group.label} />
+  }
+
   return (
     <div className={cn('flex flex-col flex-1 min-h-0', className)}>
       {header}
@@ -201,24 +215,13 @@ export function EntityList<T>({
           {...containerProps}
         >
           <div className="pt-1">
-            {hasGroups
-              ? groups!.map((group, groupIndex) => {
-                  const isCollapsed = group.collapsible && collapsedGroups?.has(group.key)
-
+            {hasGroups && windowing && viewportRef
+              ? <WindowedEntityGroups groups={groups!} getKey={getKey} renderItem={renderItem}
+                  renderHeader={renderGroupHeader} viewportRef={viewportRef} pinnedKeys={windowing.pinnedKeys} />
+              : hasGroups ? groups!.map((group, groupIndex) => {
                   return (
                     <div key={group.key} className={groupIndex > 0 ? GROUP_GAP : undefined}>
-                      {group.collapsible && onToggleCollapse ? (
-                        <CollapsibleGroupHeader
-                          label={group.label}
-                          isCollapsed={!!isCollapsed}
-                          itemCount={isCollapsed ? (group.collapsedCount ?? 0) : group.items.length}
-                          onToggle={() => onToggleCollapse(group.key)}
-                          onCollapseAll={onCollapseAll}
-                          onExpandAll={onExpandAll}
-                        />
-                      ) : (
-                        <SectionHeader label={group.label} />
-                      )}
+                      {renderGroupHeader(group)}
                       {group.items.map((item, indexInGroup) =>
                         <React.Fragment key={getKey(item)}>
                           {renderItem(item, indexInGroup, indexInGroup === 0)}

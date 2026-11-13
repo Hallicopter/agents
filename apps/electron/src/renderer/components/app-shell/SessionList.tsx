@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react"
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "react-i18next"
 import { useSetAtom } from "jotai"
@@ -37,6 +37,7 @@ import { FlipOnChange, SPRING } from "@craft-agent/ui/motion"
 import { useListReorderFlip } from "@/hooks/useListReorderFlip"
 
 export type { SessionListRow }
+const getSessionRowKey = (row: SessionListRow) => row.item.id
 
 /** Grouping mode for chat list */
 export type ChatGroupingMode = 'date' | 'status' | 'unread' | 'project'
@@ -827,6 +828,23 @@ export function SessionList({
     rowKeyAttribute: 'data-session-id',
   })
 
+  // The ordinary list already pages 50 sessions. Window only exceptional
+  // expanded families/loaded pages (search already caps 100); never split families or change the
+  // complete logical row model used by selection and keyboard navigation.
+  const windowed = flatRows.length > 200
+  const keyboardRowId = flatRows[interactions.keyboard.activeIndex]?.item.id
+  const previousWindowed = useRef(windowed)
+  useLayoutEffect(() => {
+    if (previousWindowed.current !== windowed && isFocused && shouldMoveDOMFocus && !searchActive
+      && (document.activeElement === document.body || zoneRef.current?.contains(document.activeElement))) {
+      // Crossing the opt-in threshold changes the rendering boundary. Restore
+      // keyboard focus after the new row mounts, without jumping scroll or
+      // stealing focus from a search field, dialog or context menu.
+      document.getElementById(`item-${keyboardRowId}`)?.focus({ preventScroll: true })
+    }
+    previousWindowed.current = windowed
+  }, [windowed, keyboardRowId, isFocused, shouldMoveDOMFocus, searchActive, zoneRef])
+
   // --- Empty state (non-search) — render before EntityList ---
   // Don't show empty state when there are collapsed groups with content
   if (flatRows.length === 0 && rowData.groups.length === 0 && !searchActive) {
@@ -870,7 +888,8 @@ export function SessionList({
       <FlipOnChange value={reorderFlip.value} enabled={reorderFlip.enabled} getTargets={reorderFlip.getTargets} keyOf={reorderFlip.keyOf} spring={SPRING.base} axis="y">
       <EntityList<SessionListRow>
         groups={rowData.groups}
-        getKey={(row) => row.item.id}
+        getKey={getSessionRowKey}
+        windowing={windowed ? { pinnedKeys: [keyboardRowId, highlightedSessionId].filter((id): id is string => !!id) } : undefined}
         renderItem={(row, _indexInGroup, isFirstInGroup) => {
           const flatIndex = rowIndexMap.get(row.item.id) ?? 0
           const rowProps = interactions.getRowProps(row, flatIndex)
@@ -878,7 +897,7 @@ export function SessionList({
             <SessionItem
               item={row.item}
               index={flatIndex}
-              itemProps={rowProps.buttonProps as Record<string, unknown>}
+              itemProps={{ ...rowProps.buttonProps, ...(windowed ? { 'aria-posinset': flatIndex + 1, 'aria-setsize': flatRows.length } : {}) } as Record<string, unknown>}
               isSelected={rowProps.isSelected}
               isFirstInGroup={isFirstInGroup}
               isInMultiSelect={rowProps.isInMultiSelect ?? false}
