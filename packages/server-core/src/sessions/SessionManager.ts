@@ -1350,6 +1350,7 @@ export class SessionManager implements ISessionManager {
   private pendingCredentialResolvers: Map<string, (response: import('@craft-agent/shared/protocol').CredentialResponse) => void> = new Map()
   // Permission request metadata tracking (keyed by requestId)
   private pendingPermissionRequests: Map<string, {
+    prompt?: import('@craft-agent/shared/protocol').PermissionRequest
     sessionId: string
     type?: 'bash' | 'file_write' | 'mcp_mutation' | 'api_mutation' | 'admin_approval'
     commandHash?: string
@@ -2749,6 +2750,22 @@ export class SessionManager implements ISessionManager {
 
   private readonly historyRevisions = new WeakMap<ManagedSession, string>()
 
+  private newSubmissionId(m: ManagedSession, proposed?: string): string {
+    if (!proposed) return generateMessageId()
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(proposed) || m.messages.some(x => x.id === proposed)) throw Error('Invalid or repeated submission ID')
+    return proposed
+  }
+
+  private readonly historySequences = new WeakMap<ManagedSession, number>()
+
+  // Called synchronously after hydration: metadata, messages, dispatched stream and
+  // sequence must be sampled in the same JS turn (not across another await).
+  captureHistory(id: string) {
+    const m = this.sessions.get(id)
+    if (!m?.messagesLoaded) return null
+    return {pendingPermissions: [...this.pendingPermissionRequests.values()].flatMap(p=>p.sessionId===id && p.prompt ? [p.prompt] : []), session: managedToSession(m, {messages:m.messages}), watermark:this.historySequences.get(m) ?? 0}
+  }
+
   getHistoryRevision(sessionId: string): string | null {
     const managed = this.sessions.get(sessionId)
     if (!managed) return null
@@ -2763,7 +2780,7 @@ export class SessionManager implements ISessionManager {
     const m = this.sessions.get(id)
     if (!m?.isProcessing || !m.streamingText) return
     const unsent = this.pendingDeltas.get(id)?.delta ?? ''
-    const content = m.streamingText.slice(0, m.streamingText.length - unsent.length)
+    const content = unsent && m.streamingText.endsWith(unsent) ? m.streamingText.slice(0, -unsent.length) : m.streamingText
     if (!content) return
     return {id:`stream:${m.processingGeneration}:${m.streamingTurnId ?? ''}`, role:'assistant',
       timestamp:m.lastMessageAt, content, turnId:m.streamingTurnId, isPending:true, isStreaming:true}
@@ -2782,7 +2799,6 @@ export class SessionManager implements ISessionManager {
    * stays sync — no microtask race window between the load and the enqueue.
    */
   private persistSession(managed: ManagedSession): void {
-    this.historyRevisions.delete(managed)
     if (!managed.messagesLoaded) {
       this.hydrateMessagesForColdPersist(managed)
     }
@@ -6772,7 +6788,7 @@ export class SessionManager implements ISessionManager {
 
       // Create user message for UI
       const userMessage: Message = {
-        id: generateMessageId(),
+        id: this.newSubmissionId(managed, options?.optimisticMessageId),
         role: 'user',
         content: message,
         timestamp: this.monotonic(),
@@ -6860,7 +6876,7 @@ export class SessionManager implements ISessionManager {
     } else {
       // Create new message
       userMessage = {
-        id: generateMessageId(),
+        id: this.newSubmissionId(managed, options?.optimisticMessageId),
         role: 'user',
         content: message,
         timestamp: this.monotonic(),
@@ -10010,6 +10026,16 @@ export class SessionManager implements ISessionManager {
       return
     }
 
+    if (event.type === 'permission_request') {
+      const entry = this.pendingPermissionRequests.get(event.request.requestId)
+      if (entry) entry.prompt = event.request
+    }
+    const managed = 'sessionId' in event && this.sessions.get(event.sessionId)
+    if (managed) {
+      const seq = (this.historySequences.get(managed) ?? 0) + 1
+      this.historySequences.set(managed, seq)
+      Object.assign(event, {historySeq:seq, historyEpoch:this.getHistoryRevision(managed.id)})
+    }
     this.eventSink(RPC_CHANNELS.sessions.EVENT, { to: 'workspace', workspaceId }, event)
   }
 

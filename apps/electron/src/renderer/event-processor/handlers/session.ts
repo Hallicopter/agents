@@ -556,12 +556,11 @@ export function handleUserMessage(
   const { session, streaming } = state
   const { message, status } = event
 
-  // Find existing message by ID match (backend ID, optimistic ID, or content+timestamp fallback)
+  // Find existing message by ID match (backend ID, or explicit optimistic ID)
   const existingIndex = session.messages.findIndex(m =>
     m.role === 'user' && (
       m.id === message.id ||
-      (event.optimisticMessageId && m.id === event.optimisticMessageId) ||
-      (m.content === message.content && Math.abs(m.timestamp - message.timestamp) < 5000)
+      (event.optimisticMessageId && m.id === event.optimisticMessageId)
     )
   )
 

@@ -46,8 +46,12 @@ export type ColdHistoryPage =
   | { kind: 'page'; messages: Message[]; next: string | null }
   | { kind: 'unavailable'; reason: 'state-changed' | 'oversized' }
 
-export interface HistoryCursor { revision: string; before: string }
+export interface HistoryCursor { revision: string; before: string; length?: number }
+export interface HistoryChunk { token: string; offset: number; next: number | null; data: string }
 export interface SessionHistoryWindow {
+  pendingPermissions?: PermissionRequest[]
+  watermark?: number
+  epoch?: string
   metadata: Omit<Session, 'messages'>
   messages: Message[]
   older: HistoryCursor | null

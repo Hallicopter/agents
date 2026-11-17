@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from '@/hooks/useTheme'
+import {observeHistory} from './atoms/history-replay'
 import { useSetAtom, useStore, useAtomValue, useAtom } from 'jotai'
 import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, SetupNeeds, SessionStatus, NewChatActionParams, ContentBadge, LlmConnectionWithStatus, PermissionModeState } from '../shared/types'
 import type { SessionDraft, DraftAttachmentRef } from '@craft-agent/shared/config'
@@ -34,6 +35,7 @@ import { formatSessionLoadFailure, shouldTreatSessionLoadFailureAsTransportFallb
 import { extractWorkspaceSlugFromPath } from '@craft-agent/shared/utils/workspace-slug'
 import { initRendererPerf } from './lib/perf'
 import {
+  pendingPermissionsAtom,
   initializeSessionsAtom,
   addSessionAtom,
   removeSessionAtom,
@@ -364,7 +366,7 @@ function MainApp() {
 
   const [menuNewChatTrigger, setMenuNewChatTrigger] = useState(0)
   // Permission requests per session (queue to handle multiple concurrent requests)
-  const [pendingPermissions, setPendingPermissions] = useState<Map<string, PermissionRequest[]>>(new Map())
+  const [pendingPermissions, setPendingPermissions] = useAtom(pendingPermissionsAtom)
   // Credential requests per session (queue to handle multiple concurrent requests)
   const [pendingCredentials, setPendingCredentials] = useState<Map<string, CredentialRequest[]>>(new Map())
   // Draft composer state per session (text + attachment refs), preserved across mode
@@ -773,7 +775,7 @@ function MainApp() {
             setPendingPermissions(prevPerms => {
               const next = new Map(prevPerms)
               const existingQueue = next.get(sessionId) || []
-              next.set(sessionId, [...existingQueue, effect.request])
+              next.set(sessionId, [...existingQueue.filter(p=>p.requestId!==effect.request.requestId), effect.request])
               return next
             })
 
@@ -822,7 +824,7 @@ function MainApp() {
             setPendingCredentials(prevCreds => {
               const next = new Map(prevCreds)
               const existingQueue = next.get(sessionId) || []
-              next.set(sessionId, [...existingQueue, effect.request])
+              next.set(sessionId, [...existingQueue.filter(p=>p.requestId!==effect.request.requestId), effect.request])
               return next
             })
             break
@@ -876,6 +878,7 @@ function MainApp() {
       if (!('sessionId' in event)) return
 
       const sessionId = event.sessionId
+      if (!observeHistory(sessionId,event)) return
       const workspaceId = windowWorkspaceId ?? ''
 
       // Session lifecycle events are handled explicitly (not by the agent event processor).
@@ -1554,7 +1557,7 @@ function MainApp() {
       setPendingPermissions(prev => {
         const next = new Map(prev)
         const queue = next.get(sessionId) || []
-        const remainingQueue = queue.slice(1) // Remove first item
+        const remainingQueue = queue.filter(p=>p.requestId !== requestId)
         if (remainingQueue.length === 0) {
           next.delete(sessionId)
         } else {
@@ -1569,7 +1572,7 @@ function MainApp() {
       setPendingPermissions(prev => {
         const next = new Map(prev)
         const queue = next.get(sessionId) || []
-        const remainingQueue = queue.slice(1)
+        const remainingQueue = queue.filter(p=>p.requestId !== requestId)
         if (remainingQueue.length === 0) {
           next.delete(sessionId)
         } else {
@@ -1588,7 +1591,7 @@ function MainApp() {
       setPendingCredentials(prev => {
         const next = new Map(prev)
         const queue = next.get(sessionId) || []
-        const remainingQueue = queue.slice(1) // Remove first item
+        const remainingQueue = queue.filter(p=>p.requestId !== requestId)
         if (remainingQueue.length === 0) {
           next.delete(sessionId)
         } else {

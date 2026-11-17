@@ -1,3 +1,5 @@
+import {readWindow} from './history-transfer'
+import {beginHistory,endHistory,forgetHistory,rebaseHistory} from './history-replay'
 /**
  * Per-Session State Management with Jotai
  *
@@ -181,6 +183,7 @@ export const loadedSessionsAtom = atom<Set<string>>(new Set<string>())
  * start loading before the first completes and marks the session as loaded.
  * Module-level map since it tracks in-flight promises, not React state.
  */
+export const pendingPermissionsAtom = atom(new Map<string,import('@craft-agent/shared/protocol').PermissionRequest[]>())
 const sessionLoadingPromises = new Map<string, Promise<Session | null>>()
 
 /**
@@ -335,6 +338,7 @@ export const updateStreamingContentAtom = atom(
 export const initializeSessionsAtom = atom(
   null,
   (get, set, sessions: Session[]) => {
+    forgetHistory()
     sessionLoadingPromises.clear()
     set(historyCoverageAtom, new Map())
     // Clean up stale atom family entries from previous workspace.
@@ -490,6 +494,7 @@ export const addSessionAtom = atom(
 export const removeSessionAtom = atom(
   null,
   (get, set, sessionId: string) => {
+    forgetHistory(sessionId)
     sessionLoadingPromises.delete(sessionId)
     setCursor(get, set, sessionId)
     // Clear session atom value first
@@ -637,6 +642,8 @@ async function loadSessionMessages(
   }
 
   // Create the loading promise with all the fetch and update logic
+  const events = beginHistory(sessionId)
+  const permissionsBefore = get(pendingPermissionsAtom).get(sessionId) ?? []
   const beforeLoad = get(sessionAtomFamily(sessionId))
   const workspace = get(windowWorkspaceIdAtom)
   let loadPromise!: Promise<Session | null>
@@ -645,13 +652,13 @@ async function loadSessionMessages(
     const api = window.electronAPI
     let page: import('@craft-agent/shared/protocol').SessionHistoryWindow | undefined
     if (api.getSessionHistoryWindow && api.isChannelAvailable?.('sessions:historyWindow')) {
-      try { page = await api.getSessionHistoryWindow(sessionId) }
+      try { page = await readWindow(api,sessionId) }
       catch (error) {
         // Old servers without a channel list optimistically report availability.
         if ((error as {code?:string}).code !== 'CHANNEL_NOT_FOUND') throw error
       }
     }
-    const loadedSession = page ? {...page.metadata, messages:page.messages} : await api.getSessionMessages(sessionId, { scoped: true })
+    let loadedSession = page ? {...page.metadata, messages:page.messages} : await api.getSessionMessages(sessionId, { scoped: true })
     if (workspace !== get(windowWorkspaceIdAtom) || sessionLoadingPromises.get(sessionId) !== loadPromise) return null
     if (!loadedSession) {
       if (get(sessionAtomFamily(sessionId))?.inventoryPartial) return null
@@ -664,13 +671,20 @@ async function loadSessionMessages(
     // tokenUsage and sessionFolderPath are only returned by getSession() (not getSessions()),
     // so they must be explicitly merged here to be available after app restart.
     const existingSession = get(sessionAtomFamily(sessionId))
-    if (page && existingSession?.messages.some(m => m.role === 'user' && m.isPending)) {
-      throw Error('Waiting for message confirmation; history was not replaced')
+    if (page) {
+      loadedSession = rebaseHistory(page,events,existingSession)
+      if(page.pendingPermissions){
+        const current = get(pendingPermissionsAtom).get(sessionId) ?? []
+        const dismissed = new Set(permissionsBefore.filter(p=>!current.some(c=>c.requestId===p.requestId)).map(p=>p.requestId))
+        const queue = new Map(page.pendingPermissions.filter(p=>!dismissed.has(p.requestId)).map(p=>[p.requestId,p]))
+        for(const e of events) if((e.historySeq??0)>(page.watermark??0)) {
+          if(e.type==='complete') queue.clear()
+          if(e.type==='permission_request' && current.some(p=>p.requestId===e.request.requestId)) queue.set(e.request.requestId,e.request)
+        }
+        set(pendingPermissionsAtom,new Map(get(pendingPermissionsAtom)).set(sessionId,[...queue.values()]))
+      }
     }
-    if (page && existingSession?.messages !== beforeLoad?.messages && (existingSession?.messages.length || beforeLoad?.messages.length)) {
-      throw Error('New events arrived while loading; refresh recent messages')
-    }
-    const preservedStaleMessages = !!existingSession
+    const preservedStaleMessages = !page && !!existingSession
       && existingSession.messages.length > 0
       && (!loadedSession.messages || loadedSession.messages.length === 0)
 
@@ -680,7 +694,7 @@ async function loadSessionMessages(
     if (existingSession && (existingSession.inventoryPartial || force || page)) {
       hydrated = { ...loadedSession }
       for (const key of Object.keys(existingSession) as (keyof Session)[]) {
-        if (key !== 'inventoryPartial' && key !== 'messages' && !Object.is(existingSession[key], beforeLoad?.[key])) {
+        if (key !== 'inventoryPartial' && key !== 'messages' && (Object.hasOwn(existingSession,key) && ['hasUnread','isFlagged','sessionStatus','labels','lastReadMessageId'].includes(key) || !Object.is(existingSession[key], beforeLoad?.[key]))) {
           Object.assign(hydrated, { [key]: existingSession[key] })
         }
       }
@@ -742,6 +756,7 @@ async function loadSessionMessages(
   try {
     return await loadPromise
   } finally {
+    endHistory(sessionId,events)
     if (sessionLoadingPromises.get(sessionId) === loadPromise) sessionLoadingPromises.delete(sessionId)
   }
 }
@@ -750,7 +765,7 @@ export const loadOlderHistoryAtom = atom(null, async (get, set, id: string) => {
   const cursor = get(historyCoverageAtom).get(id)
   const workspace = get(windowWorkspaceIdAtom)
   if (!cursor) return
-  const page = await window.electronAPI.getSessionHistoryWindow(id, cursor)
+  const page = await readWindow(window.electronAPI,id,cursor)
   const current = get(sessionAtomFamily(id))
   if (!current || workspace !== get(windowWorkspaceIdAtom) || cursor !== get(historyCoverageAtom).get(id)) return
   if (current.messages[0]?.id !== cursor.before || page.metadata.id !== id || page.metadata.workspaceId !== current.workspaceId) throw Error('History anchor changed; refresh recent messages')
