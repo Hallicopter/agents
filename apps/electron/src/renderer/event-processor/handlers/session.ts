@@ -352,7 +352,7 @@ export function handleInterrupted(
     .filter(m => m.role !== 'status')  // Remove transient status messages
     // Only drop queued bubbles when the user explicitly stopped — silent
     // redirects auto-replay them so they must remain visible (#616).
-    .filter(m => !(isUserInitiated && m.isQueued))
+    .filter(m => event.cancelledIds ? !event.cancelledIds.includes(m.id) : !(isUserInitiated && m.isQueued))
     .map(m => {
       // Mark running tools as interrupted
       if (m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error') {

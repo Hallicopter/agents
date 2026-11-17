@@ -275,6 +275,7 @@ export interface InfoEvent {
  * Interrupted event
  */
 export interface InterruptedEvent {
+  cancelledIds?: string[]
   type: 'interrupted'
   sessionId: string
   message?: Message

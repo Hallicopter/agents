@@ -48,7 +48,7 @@ export function registerHistoryWindow(server: RpcServer, deps: HandlerDeps) {
       const page = { metadata, messages:visible, pendingPermissions:cursor ? undefined : captured?.pendingPermissions, watermark:captured?.watermark, epoch, older:start ? {revision,length,before:messages[start].id} : null }
       if (Buffer.byteLength(serializeEnvelope({type:'response',channel,id:'x'.repeat(128),result:page})) <= 127*1024) return page
       if (end-start <= 1) {
-        const token = randomUUID(), body = JSON.stringify(page)
+        const token = randomUUID(), body = serializeEnvelope({type:'response',id:'history',channel,result:page})
         chunks.set(token,{body,owner,expires:setTimeout(() => chunks.delete(token),60000)})
         return piece(token,owner,0)
       }

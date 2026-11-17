@@ -7493,7 +7493,7 @@ export class SessionManager implements ISessionManager {
         sessionId,
         message: interruptedMessage,
         // Include queued texts so the UI can restore them to the input field
-        ...(queuedTexts.length > 0 ? { queuedMessages: queuedTexts } : {}),
+        ...(queuedTexts.length > 0 ? { queuedMessages: queuedTexts, cancelledIds: [...queuedMessageIds] } : {}),
       }, managed.workspace.id)
     } else {
       // Still send interrupted event but without the message (for UI state update)
@@ -7501,7 +7501,7 @@ export class SessionManager implements ISessionManager {
         type: 'interrupted',
         sessionId,
         // Include queued texts so the UI can restore them to the input field
-        ...(queuedTexts.length > 0 ? { queuedMessages: queuedTexts } : {}),
+        ...(queuedTexts.length > 0 ? { queuedMessages: queuedTexts, cancelledIds: [...queuedMessageIds] } : {}),
       }, managed.workspace.id)
     }
 

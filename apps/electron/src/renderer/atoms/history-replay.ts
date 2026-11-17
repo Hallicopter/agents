@@ -20,6 +20,8 @@ export function rebaseHistory(page:SessionHistoryWindow, events:Event[], current
   let state:SessionState={session,streaming:tail?{content:tail.content,turnId:tail.turnId}:null}
   let seq=page.watermark ?? 0
   for(const event of events){
+    // Caller-only post-ACK error/complete are explicitly not part of managed history.
+    if (event.historySeq===undefined && (event.type==='error' || event.type==='complete')) {state=processEvent(state,event as AgentEvent).state;continue}
     if(page.watermark===undefined || event.historyEpoch!==page.epoch || event.historySeq===undefined) throw Error('History stream changed; refresh recent messages')
     if(event.historySeq<=seq) continue
     if(event.historySeq!==seq+1) throw Error('History stream gap; refresh recent messages')

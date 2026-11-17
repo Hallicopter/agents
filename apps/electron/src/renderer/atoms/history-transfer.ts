@@ -1,3 +1,4 @@
+import {deserializeEnvelope} from '../../transport/codec'
 import type { HistoryCursor, SessionHistoryWindow } from '@craft-agent/shared/protocol'
 import type { ElectronAPI } from '../../shared/types'
 
@@ -9,7 +10,7 @@ export async function readWindow(api:Pick<ElectronAPI,'getSessionHistoryWindow'>
   while ('token' in page && page.token === token && page.offset === offset && page.data.length > 0) {
     parts.push(page.data)
     offset += page.data.length
-    if (page.next === null) return JSON.parse(parts.join(''))
+    if (page.next === null) return deserializeEnvelope(parts.join('')).result as SessionHistoryWindow
     if (page.next !== offset) break
     page = await api.getSessionHistoryWindow(id,cursor,{token,offset})
   }

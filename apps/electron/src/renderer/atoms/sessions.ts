@@ -651,7 +651,7 @@ async function loadSessionMessages(
     // Fetch messages from main process
     const api = window.electronAPI
     let page: import('@craft-agent/shared/protocol').SessionHistoryWindow | undefined
-    if (api.getSessionHistoryWindow && api.isChannelAvailable?.('sessions:historyWindow')) {
+    if (typeof api.getSessionHistoryWindow === 'function' && api.isChannelAvailable?.('sessions:historyWindow')) {
       try { page = await readWindow(api,sessionId) }
       catch (error) {
         // Old servers without a channel list optimistically report availability.
