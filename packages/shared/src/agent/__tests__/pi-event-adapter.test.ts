@@ -1632,3 +1632,58 @@ describe('PiEventAdapter', () => {
     });
   });
 });
+
+
+describe('Pi consumed-error accounting (offline)', () => {
+  const usage = (input = 6714, output = 14, cost = 0.013568) => ({ input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output, cost: { total: cost } });
+  const message = (u: any, errorMessage = 'OpenAI service tier mismatch: requested ultrafast, received default.') => ({
+    type: 'message_end', message: { role: 'assistant', api: 'openai-codex-responses', provider: 'openai-codex', model: 'gpt-6.2-sol', content: [{ type: 'text', text: 'Do not publish failed text' }], stopReason: 'error', errorMessage, usage: u },
+  });
+  const end = (a: PiEventAdapter) => collect(a.adaptEvent({ type: 'agent_end', messages: [], willRetry: false } as any)).find(e => e.type === 'complete');
+  it('counts consumed failed attempts once, keeps latest input and sums output/cost, suppresses failed text', () => {
+    const a = new PiEventAdapter(); a.startTurn();
+    const first = collect(a.adaptEvent(message(usage()) as any));
+    expect(first.some(e => e.type === 'text_complete')).toBe(false);
+    expect(first.some(e => e.type === 'usage_update')).toBe(true);
+    collect(a.adaptEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Recovered fixture' }], usage: usage(7000, 10, 0.0141) } } as any));
+    const total = end(a).usage;
+    expect(total).toMatchObject({ inputTokens: 7000, outputTokens: 24 });
+    expect(total.costUsd).toBeCloseTo(0.027668, 9);
+    expect(end(a).usage).toBeUndefined(); // late duplicate terminal cannot double-count
+    a.startTurn();
+    collect(a.adaptEvent(message(usage(0, 0, 0)) as any));
+    expect(end(a).usage).toBeUndefined(); // no stale prior-turn context/spend
+  });
+  it('does not replace valid usage with zero or malformed synthetic failures', () => {
+    for (const bad of [usage(0, 0, 0), usage(NaN, 1, 1), usage(-1, 1, 1), usage(1, Infinity, 1)]) {
+      const a = new PiEventAdapter(); a.startTurn();
+      collect(a.adaptEvent(message(usage()) as any)); collect(a.adaptEvent(message(bad) as any));
+      expect(end(a).usage).toMatchObject({ inputTokens: 6714, outputTokens: 14, costUsd: 0.013568 });
+    }
+  });
+  it('retains consumed usage when overflow compaction fails or an automatic retry is cancelled', () => {
+    const overflow = new PiEventAdapter(); overflow.startTurn();
+    collect(overflow.adaptEvent(message(usage(), 'maximum context length exceeded') as any));
+    collect(overflow.adaptEvent({ type: 'agent_end', messages: [] } as any));
+    const failed = collect(overflow.adaptEvent({ type: 'compaction_end', aborted: true, errorMessage: 'Offline compaction cancelled' } as any));
+    expect(failed.find(e => e.type === 'complete').usage).toMatchObject({ inputTokens: 6714, outputTokens: 14, costUsd: 0.013568 });
+    overflow.resetRecoveryState();
+    const retry = new PiEventAdapter(); retry.startTurn();
+    collect(retry.adaptEvent(message(usage(), 'fetch failed') as any));
+    collect(retry.adaptEvent({ type: 'agent_end', messages: [], willRetry: true } as any));
+    const cancelled = collect(retry.adaptEvent({ type: 'auto_retry_end', success: false, attempt: 1, finalError: 'Offline cancelled' } as any));
+    expect(cancelled.find(e => e.type === 'complete').usage).toMatchObject({ inputTokens: 6714, outputTokens: 14, costUsd: 0.013568 });
+    retry.resetRecoveryState();
+  });
+  it('publishes usage before a recovery fallback closes the queue', async () => {
+    const a = new PiEventAdapter(); a.startTurn(); const events: any[] = []; let complete = false;
+    a.setRecoveryFallbackHandlers(e => events.push(e), () => { complete = true; });
+    collect(a.adaptEvent(message(usage(), 'fetch failed') as any));
+    // Direct bounded test seam avoids real timers and all provider traffic.
+    (a as any).armRetryFallbackTimer(1, 'offline test');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(complete).toBe(true);
+    expect(events.find(e => e.type === 'complete').usage).toMatchObject({ inputTokens: 6714, outputTokens: 14, costUsd: 0.013568 });
+    a.resetRecoveryState();
+  });
+});

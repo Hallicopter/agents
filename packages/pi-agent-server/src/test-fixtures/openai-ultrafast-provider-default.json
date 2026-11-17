@@ -1,0 +1,16 @@
+{
+  "provenance": "Sanitized actual native OAuth SSE terminal observed 2026-11-17T20:40:35.733Z. Requested ultrafast; provider returned default. No credentials, IDs, prompts or output retained.",
+  "type": "response.completed",
+  "response": {
+    "model": "gpt-6.2-sol",
+    "service_tier": "default",
+    "status": "completed",
+    "usage": {
+      "input_tokens": 6714,
+      "input_tokens_details": { "cached_tokens": 0 },
+      "output_tokens": 14,
+      "output_tokens_details": { "reasoning_tokens": 0 },
+      "total_tokens": 6728
+    }
+  }
+}

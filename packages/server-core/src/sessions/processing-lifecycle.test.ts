@@ -59,7 +59,7 @@ describe('processing lifecycle → Telegram progress', () => {
     .filter(e => e.type === 'processing_changed')
     .map(e => e.isProcessing)
 
-  function silentAgent() {
+  function silentAgent(firstUsage?: { inputTokens: number; outputTokens: number; costUsd: number }) {
     const started = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
     const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
     let turn = 0
@@ -71,7 +71,7 @@ describe('processing lifecycle → Telegram progress', () => {
         const index = turn++
         started[index]!.resolve()
         await gates[index]!.promise
-        yield { type: 'complete' }
+        yield { type: 'complete', ...(index === 0 && firstUsage ? { usage: firstUsage } : {}) }
       },
     }
     ;(sm as any).getOrCreateAgent = async () => agent
@@ -254,6 +254,48 @@ describe('processing lifecycle → Telegram progress', () => {
     for (const processing of [false, true, true, false, false]) (sm as any).setProcessing(managed, processing)
     expect(transitions(events)).toEqual([true, false])
     expect(typing).toBe(1)
+  })
+
+  it.each(['generation', 'identity'])('completion awaiting usage flush cannot stop a replacement %s', async replacementKind => {
+    const agent = silentAgent({ inputTokens: 6714, outputTokens: 14, costUsd: 0.013568 })
+    const entered = Promise.withResolvers<void>()
+    const gate = Promise.withResolvers<void>()
+    let disposals = 0
+    let gatedUsage = false
+    ;(sm as any).flushSession = async () => {
+      if (!gatedUsage && managed.tokenUsage?.outputTokens === 14) {
+        gatedUsage = true
+        entered.resolve()
+        await gate.promise
+      }
+    }
+    ;(sm as any).disposeManagedAgentRuntime = async () => { disposals++ }
+    const first = sm.sendMessage(managed.id, 'counted old turn', undefined, undefined, { hidden: true })
+    await agent.started[0]!.promise
+    agent.gates[0]!.resolve()
+    await entered.promise // real processEvent has counted usage and yielded to flush I/O
+    let active = managed
+    if (replacementKind === 'generation') {
+      ;(sm as any).setProcessing(managed, false)
+    } else {
+      active = createManagedSession({ id: managed.id, name: 'Replacement' }, managed.workspace, { messagesLoaded: true })
+      active.sdkSessionId = 'offline-sdk'
+      // Deliberately reuse the numeric generation: object identity must guard too.
+      active.processingGeneration = managed.processingGeneration - 1
+      ;(sm as any).sessions.set(managed.id, active)
+    }
+    const second = sm.sendMessage(active.id, 'replacement', undefined, undefined, { hidden: true })
+    await agent.started[1]!.promise
+    gate.resolve()
+    await first
+    expect(active.isProcessing).toBe(true)
+    expect(events.some(e => e.type === 'complete')).toBe(false)
+    expect(disposals).toBe(0)
+    expect((renderer as any).states.get('binding').typingActive).toBe(true)
+    agent.gates[1]!.resolve()
+    await second
+    await completed.promise
+    expect(active.isProcessing).toBe(false)
   })
 
   it.each(['complete', 'error'])('stale old iterator %s cannot stop a replacement silent turn', async terminal => {

@@ -146,6 +146,76 @@ try {
         await page.evaluate(() => window.__speedFixture.newConversation())
         await expectChip('Standard')
         check(`${mode}: new conversation does not inherit paid speed`, await page.evaluate(() => window.__speedFixture.session.openAISpeed === undefined))
+
+        // Canonical renderer replay only: NOT a live provider response or successful Ultrafast.
+        // The separately owned adapter fix supplies this golden error+complete payload.
+        await set({ provider: 'openai', session: {
+          openAISpeed: 'ultrafast', isProcessing: true, messages: [],
+          tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, contextTokens: 0, costUsd: 0 },
+        } })
+        const beforeReplay = await callCount()
+        await page.evaluate(() => window.__speedFixture.applyEvents(window.__speedFixture.speedMismatchEvents()))
+        const assertAccounting = async phase => {
+          await page.waitForFunction(() => window.__speedFixture.session.tokenUsage?.costUsd === 0.013568)
+          const snapshot = await page.evaluate(() => ({
+            usage: window.__speedFixture.session.tokenUsage,
+            requested: window.__speedFixture.session.openAISpeed,
+            processing: window.__speedFixture.session.isProcessing,
+            roles: window.__speedFixture.session.messages.map(message => message.role),
+            turnTypes: window.__speedFixture.turnTypes,
+          }))
+          check(`${mode}/${phase}: actual consumed 6714 input and 14 output retained`, snapshot.usage.inputTokens === 6714 && snapshot.usage.outputTokens === 14 && snapshot.usage.totalTokens === 6728)
+          check(`${mode}/${phase}: native context occupancy 11000 coexists with consumed input 6714`, snapshot.usage.contextUsage?.usedTokens === 11000 && snapshot.usage.inputTokens === 6714 && await page.getByTestId('native-context-occupancy').textContent() === '11000')
+          check(`${mode}/${phase}: Standard cost estimate is not premium-multiplied`, snapshot.usage.costUsd === 0.013568 && snapshot.usage.costUsd !== 0.013568 * 3 && snapshot.usage.costUsd !== 0.013568 * 6)
+          check(`${mode}/${phase}: saved Requested Ultrafast remains unchanged and idle`, snapshot.requested === 'ultrafast' && snapshot.processing === false)
+          await expectChip('Ultrafast')
+          check(`${mode}/${phase}: consumed usage and estimate visible in labelled fixture diagnostics`,
+            await page.getByTestId('consumed-input').textContent() === '6714'
+            && await page.getByTestId('consumed-output').textContent() === '14'
+            && await page.getByTestId('consumed-total').textContent() === '6728'
+            && await page.getByTestId('standard-estimate').textContent() === '0.013568')
+          const transcript = page.getByTestId('accounting-transcript')
+          check(`${mode}/${phase}: mismatch is an actual error marker, never an assistant answer`,
+            JSON.stringify(snapshot.roles) === '["error"]' && JSON.stringify(snapshot.turnTypes) === '["system"]'
+            && await transcript.locator('[data-message-role="error"] .bg-destructive-tint').count() === 1
+            && await transcript.locator('[data-message-role="assistant"]').count() === 0
+            && await transcript.textContent().then(text => text.includes('provider returned default')))
+          check(`${mode}/${phase}: offline mismatch is explicitly not Ultrafast success`, await page.getByTestId('mismatch-accounting').textContent().then(text => text.includes('NOT a successful Ultrafast response or actual billing proof')))
+          await page.screenshot({ path: resolve(dir, `${compact ? 'compact' : 'full'}-mismatch-${phase}.png`), fullPage: true, animations: 'disabled' })
+          const modelButton = compact
+            ? page.getByRole('button', { name: 'Model: gpt-6.2-sol', exact: true })
+            : page.getByRole('button', { name: 'gpt-6.2-sol', exact: true })
+          await modelButton.click()
+          const contextUsage = page.getByText(/11k/)
+          await contextUsage.waitFor()
+          await contextUsage.scrollIntoViewIfNeeded()
+          await page.screenshot({ path: resolve(dir, `${compact ? 'compact' : 'full'}-mismatch-${phase}-context.png`), fullPage: true, animations: 'disabled' })
+          check(`${mode}/${phase}: actual composer footer shows native 11k occupancy, not consumed 6.7k`, await contextUsage.evaluate(el => {
+            const r = el.getBoundingClientRect()
+            return el.textContent.includes('11k') && !el.textContent.includes('6.7k') && r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth
+          }))
+          await page.keyboard.press('Escape')
+        }
+        await assertAccounting('live')
+        check(`${mode}: replay does not issue a session or provider request`, await callCount() === beforeReplay)
+        const savedSnapshot = await page.evaluate(() => window.__speedFixture.saveSnapshot())
+        await writeFile(resolve(dir, `${compact ? 'compact' : 'full'}-mismatch-saved-session.json`), savedSnapshot)
+        // Cross a real browser reload, then rebuild saved state via initializeSessionsAtom.
+        await page.reload({ waitUntil: 'networkidle' })
+        await page.waitForFunction(() => window.__speedFixture?.reloadSnapshot)
+        await set({ compact, provider: 'openai', providerType: 'pi' })
+        await page.evaluate(snapshot => window.__speedFixture.reloadSnapshot(snapshot), savedSnapshot)
+        await assertAccounting('reloaded')
+        check(`${mode}: initializer rebuilt saved nonzero usage and requested-tier metadata`, await page.evaluate(() => {
+          const meta = window.__speedFixture.reloadedMetadata
+          return meta?.tokenUsage?.inputTokens === 6714 && meta.tokenUsage.outputTokens === 14
+            && meta.tokenUsage.totalTokens === 6728 && meta.tokenUsage.costUsd === 0.013568
+            && meta.tokenUsage.contextUsage?.usedTokens === 11000
+            && meta.openAISpeed === 'ultrafast' && meta.messageCount === 1
+        }))
+        check(`${mode}: reload restoration issues no session or provider request`, await callCount() === 0)
+        await page.evaluate(() => window.__speedFixture.newConversation())
+        await expectChip('Standard')
       }
       await page.setViewportSize({ width: 320, height: 568 })
       await set({ compact: true, provider: 'openai-codex', providerType: 'pi', session: { openAISpeed: 'standard', model: 'pi/gpt-6.2-sol', isProcessing: false } })
@@ -177,5 +247,5 @@ try {
     }
   }
 } finally { await browser.close() }
-await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ offline: true, providerCalls: 0, checks }, null, 2))
+await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ offline: true, providerCalls: 0, accounting: 'Canonical synthetic error+complete replay, not actual provider billing or Ultrafast success', checks }, null, 2))
 console.log(JSON.stringify({ passed: checks.length, artifacts }, null, 2))

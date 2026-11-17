@@ -8,6 +8,7 @@ import { getOpenAI62Models } from '../../shared/src/config/openai-62-models.ts';
 import { assertOpenAISpeedAllowed, getOpenAISpeedOptions, getOpenAISpeedMultipliers,
   getOpenAISpeedWarning, ULTRAFAST_PROMO_END, type OpenAISpeed } from '../../shared/src/agent/openai-speed.ts';
 import { configureOpenAISpeedBudget, wrapOpenAISpeedStream, type SpeedReport } from './openai-speed.ts';
+import { capturedSpeedEvents } from './test-fixtures/openai-speed-captured';
 
 const context = { messages: [{ role: 'user' as const, content: 'offline fixture', timestamp: 0 }] };
 const model = getOpenAI62Models('openai-codex').find(m => m.id === 'gpt-6.2-sol')!;
@@ -247,6 +248,23 @@ describe('native tier forwarding and truthful accounting (offline)', () => {
     await (await wrapOpenAISpeedStream(fake.original,
       () => ({ speed: 'standard', model: model.id, provider: undefined }), () => {})(model, context, { onPayload: body => body })).result();
     expect(fake.payloads[0].service_tier).toBeUndefined();
+  });
+
+  it('retains captured actual mismatch consumption and Standard estimate through error completion (offline)', async () => {
+    const { events, result, reports, requests, baseCostEstimate } = await capturedSpeedEvents();
+    expect(requests).toBe(1);
+    expect(result.stopReason).toBe('error');
+    expect(events.some(e => e.type === 'text_complete')).toBe(false);
+    expect(events.find(e => e.type === 'complete')).toMatchObject({ usage: { inputTokens: 6714, outputTokens: 14, costUsd: baseCostEstimate } });
+    expect(baseCostEstimate).toBeCloseTo(0.013568, 9);
+    expect(reports[0]).toMatchObject({ requested: 'ultrafast', applied: 'default', verification: 'mismatch', tokenCostEstimateMultiplier: 1 });
+  });
+  it('preserves confirmed-success accounting with a clearly synthetic Ultrafast variant (offline)', async () => {
+    const { events, reports, requests, baseCostEstimate } = await capturedSpeedEvents('ultrafast');
+    expect(requests).toBe(1);
+    expect(events.some(e => e.type === 'text_complete')).toBe(true);
+    expect(events.find(e => e.type === 'complete')).toMatchObject({ usage: { inputTokens: 6714, outputTokens: 14, costUsd: baseCostEstimate * 3 } });
+    expect(reports[0]).toMatchObject({ requested: 'ultrafast', applied: 'ultrafast', verification: 'confirmed', tokenCostEstimateMultiplier: 3 });
   });
 
 });

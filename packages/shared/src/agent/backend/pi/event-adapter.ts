@@ -123,6 +123,7 @@ export class PiEventAdapter extends BaseEventAdapter {
   // Output and cost of every assistant message in the turn (lastUsage holds only the final call)
   private turnOutputTokens = 0;
   private turnCostUsd = 0;
+  private usageCompletionEmitted = false;
 
   // ============================================================
   // Overflow-recovery state machine
@@ -250,6 +251,20 @@ export class PiEventAdapter extends BaseEventAdapter {
     if (held) yield held;
   }
 
+  /** All terminal paths report consumed usage once, including recovery failure. */
+  private completeWithUsage(): CraftAgentEvent & { type: 'complete' } {
+    if (!this.lastUsage || this.usageCompletionEmitted) return { type: 'complete' };
+    this.usageCompletionEmitted = true;
+    return { type: 'complete', usage: {
+      inputTokens: this.lastUsage.input + (this.lastUsage.cacheRead || 0),
+      outputTokens: this.turnOutputTokens,
+      cacheReadTokens: this.lastUsage.cacheRead,
+      cacheCreationTokens: this.lastUsage.cacheWrite,
+      costUsd: this.turnCostUsd,
+      contextWindow: this.contextWindow,
+    } };
+  }
+
   /**
    * Arm the auto-retry fallback timer. Fires only if the state is unchanged
    * when the timeout elapses (a late event may already have moved us on).
@@ -269,6 +284,8 @@ export class PiEventAdapter extends BaseEventAdapter {
       this.retryState = 'none';
       this.onFallbackEvent?.({ type: 'retry', phase: 'end' });
       this.onFallbackEvent?.(held);
+      const completion = this.completeWithUsage();
+      if (completion.usage) this.onFallbackEvent?.(completion);
       this.onFallbackComplete?.();
     }, timeoutMs);
   }
@@ -325,6 +342,8 @@ export class PiEventAdapter extends BaseEventAdapter {
         timeoutMs: OVERFLOW_FALLBACK_TIMEOUT_MS,
       });
       this.onFallbackEvent?.({ type: 'error', message: errorMessage });
+      const completion = this.completeWithUsage();
+      if (completion.usage) this.onFallbackEvent?.(completion);
       this.onFallbackComplete?.();
     }, OVERFLOW_FALLBACK_TIMEOUT_MS);
   }
@@ -360,6 +379,8 @@ export class PiEventAdapter extends BaseEventAdapter {
     this.hasEmittedFinalText = false;
     this.subTurnCounter = 0;
     this.messageSubTurnId = null;
+    this.lastUsage = undefined;
+    this.usageCompletionEmitted = false;
     this.turnOutputTokens = 0;
     this.turnCostUsd = 0;
     // A new Craft turn can only start once the previous queue completed (or
@@ -459,22 +480,7 @@ export class PiEventAdapter extends BaseEventAdapter {
           // The retried run finished cleanly.
           this.retryState = 'none';
         }
-        if (this.lastUsage) {
-          const inputTokens = this.lastUsage.input + (this.lastUsage.cacheRead || 0);
-          yield {
-            type: 'complete',
-            usage: {
-              inputTokens,
-              outputTokens: this.turnOutputTokens,
-              cacheReadTokens: this.lastUsage.cacheRead,
-              cacheCreationTokens: this.lastUsage.cacheWrite,
-              costUsd: this.turnCostUsd,
-              contextWindow: this.contextWindow,
-            },
-          };
-        } else {
-          yield { type: 'complete' };
-        }
+        yield this.completeWithUsage();
         break;
       }
 
@@ -533,8 +539,29 @@ export class PiEventAdapter extends BaseEventAdapter {
         const sdkMessageId = (event as { sdkMessageId?: string }).sdkMessageId ?? msg?.id;
         if (msg?.role !== 'assistant') break;
 
+        // A provider can consume tokens before an error (including a rejected
+        // service-tier mismatch). Account that consumption even when its text is
+        // discarded. Synthetic zero-usage failures must not erase a prior call
+        // in the same turn; unknown usage is not evidence of a free request.
+        let usageUpdate: CraftAgentEvent | undefined;
+        if (msg.usage && typeof msg.usage.input === 'number') {
+          const counts = [msg.usage.input, msg.usage.output ?? 0, msg.usage.cacheRead ?? 0,
+            msg.usage.cacheWrite ?? 0, msg.usage.totalTokens ?? 0, msg.usage.cost?.total ?? 0];
+          const valid = counts.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0);
+          if (valid && (msg.stopReason !== 'error' || counts.some(n => n > 0))) {
+            this.lastUsage = msg.usage;
+            this.turnOutputTokens += msg.usage.output || 0;
+            this.turnCostUsd += msg.usage.cost?.total || 0;
+            usageUpdate = { type: 'usage_update', usage: {
+              inputTokens: msg.usage.input + (msg.usage.cacheRead || 0),
+              contextWindow: this.contextWindow,
+            } };
+          }
+        }
+
         // Surface API errors — Pi SDK sets stopReason: 'error' and errorMessage on failures
         if (msg.stopReason === 'error' && msg.errorMessage) {
+          if (usageUpdate) yield usageUpdate;
           // Failed streams never become text_complete. Explicitly discard the
           // partial before the SDK can retry (or terminate), including any
           // pending server-side delta batch. Completed messages are untouched.
@@ -607,20 +634,8 @@ export class PiEventAdapter extends BaseEventAdapter {
           );
         }
 
-        // Emit usage_update if the assistant message includes token usage
-        if (msg.usage && typeof msg.usage.input === 'number') {
-          this.lastUsage = msg.usage;
-          this.turnOutputTokens += msg.usage.output || 0;
-          this.turnCostUsd += msg.usage.cost?.total || 0;
-          const inputTokens = msg.usage.input + (msg.usage.cacheRead || 0);
-          yield {
-            type: 'usage_update',
-            usage: {
-              inputTokens,
-              contextWindow: this.contextWindow,
-            },
-          };
-        }
+        // Preserve successful text → usage ordering for existing consumers.
+        if (usageUpdate) yield usageUpdate;
         break;
       }
 
@@ -822,7 +837,7 @@ export class PiEventAdapter extends BaseEventAdapter {
             this.overflowState === 'awaiting' ||
             this.overflowState === 'held'
           ) {
-            yield { type: 'complete' };
+            yield this.completeWithUsage();
             this.pendingQueueComplete = true;
             this.overflowState = 'none';
             this.heldOverflowError = null;
@@ -880,7 +895,7 @@ export class PiEventAdapter extends BaseEventAdapter {
               yield { type: 'error', message: `Retry failed: ${retryEndEvent.finalError}` };
             }
           }
-          yield { type: 'complete' };
+          yield this.completeWithUsage();
           this.pendingQueueComplete = true;
           break;
         }

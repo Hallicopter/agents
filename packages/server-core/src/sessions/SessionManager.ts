@@ -7205,6 +7205,13 @@ export class SessionManager implements ISessionManager {
 
         // Process the event first
         await this.processEvent(managed, event)
+        // Event handling can await persistence I/O. A stop/handoff or reused ID
+        // may have installed a replacement turn while the old event was suspended.
+        if (this.sessions.get(sessionId) !== managed || managed.processingGeneration !== myGeneration) {
+          sendSpan.mark('chat.superseded')
+          sendSpan.end()
+          return
+        }
 
         // Fallback: Capture SDK session ID if the onSdkSessionIdUpdate callback didn't fire.
         // Primary capture happens in getOrCreateAgent() via onSdkSessionIdUpdate callback,
@@ -7380,7 +7387,7 @@ export class SessionManager implements ISessionManager {
       // Only handle cleanup for unexpected exits (loop break without complete event)
       // Normal completion returns early after calling onProcessingStopped
       // Errors are handled in catch block
-      if (managed.isProcessing && managed.processingGeneration === myGeneration) {
+      if (this.sessions.get(sessionId) === managed && managed.isProcessing && managed.processingGeneration === myGeneration) {
         sessionLog.info('Finally block cleanup - unexpected exit')
         sendSpan.mark('chat.unexpected_exit')
         sendSpan.end()
@@ -9992,6 +9999,10 @@ export class SessionManager implements ISessionManager {
           if (event.usage.contextWindow) {
             managed.tokenUsage.contextWindow = event.usage.contextWindow
           }
+          // Flush counted consumption before completion metadata reads disk;
+          // mark-read/unread can otherwise re-enqueue an older zero/stale snapshot.
+          this.persistSession(managed)
+          await this.flushSession(managed.id)
         }
         break
 
