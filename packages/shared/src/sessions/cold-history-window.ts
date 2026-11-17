@@ -1,11 +1,11 @@
 import { open, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { expandSessionPath } from './jsonl'
+import { expandSessionPath, isLikelyEvicted } from './jsonl'
 import type { StoredMessage } from './types'
 
 // Internal disk cursor, not a public RPC token. Callers must bind it to an authorized
 // session and must prefer managed state when it has unpersisted changes.
-interface DiskCursor { revision: string; end: number }
+export interface DiskCursor { revision: string; end: number }
 const MAX_READ = 96 * 1024
 const MAX_ROWS = 64
 const fingerprint = (s: {dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint;ctimeNs:bigint}) =>
@@ -14,6 +14,7 @@ const fingerprint = (s: {dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint;ctimeN
 /** Read only the suffix of an atomic JSONL snapshot. Never silently skip a giant,
  * incomplete or malformed record, or claim that the returned window is full history. */
 export async function readColdHistoryWindow(path: string, cursor?: DiskCursor) {
+  if (isLikelyEvicted(await stat(path))) throw Error('History file is not resident')
   const file = await open(path, 'r')
   try {
     const initial = await file.stat({bigint:true}), revision = fingerprint(initial)

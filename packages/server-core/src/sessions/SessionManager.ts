@@ -58,6 +58,7 @@ import {
   getSessionPath as getSessionStoragePath,
   ensureSessionDir,
   getSessionFilePath,
+  readColdHistoryWindow, type DiskCursor,
   readSessionHeader,
   generateSessionId,
   sessionPersistenceQueue,
@@ -3239,6 +3240,16 @@ export class SessionManager implements ISessionManager {
    * Used for lazy loading session messages when session is selected.
    * Messages are loaded from disk on first access to reduce memory usage.
    */
+  async readColdHistoryPage(sessionId: string, workspaceId: string, cursor?: DiskCursor) {
+    const managed = this.sessions.get(sessionId)
+    const eligible = () => managed && this.sessions.get(sessionId) === managed
+      && managed.workspace.id === workspaceId && !managed.messagesLoaded && !managed.isProcessing
+      && !this.messageLoadingPromises.has(sessionId)
+    if (!managed || !eligible()) return null
+    const page = await readColdHistoryWindow(getSessionFilePath(managed.workspace.rootPath, sessionId), cursor)
+    return eligible() ? page : null
+  }
+
   async getSession(sessionId: string): Promise<Session | null> {
     const m = this.sessions.get(sessionId)
     if (!m) return null

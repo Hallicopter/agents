@@ -51,6 +51,7 @@ export interface ISessionManager {
 
   getSessionInventoryIds(workspaceId?: string, priorityIds?: string[]): string[]
   getSessions(workspaceId?: string): Session[]
+  readColdHistoryPage(sessionId: string, workspaceId: string, cursor?: import('@craft-agent/shared/sessions').DiskCursor): Promise<Awaited<ReturnType<typeof import('@craft-agent/shared/sessions').readColdHistoryWindow>> | null>
   getSession(sessionId: string): Promise<Session | null>
   /** Creates a session and (unless `internal.emitCreatedEvent === false`) announces it to the
    *  renderer so it hydrates full metadata instead of fabricating a "New Chat" placeholder. */

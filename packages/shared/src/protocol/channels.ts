@@ -26,6 +26,7 @@ export const RPC_CHANNELS = {
     CREATE: 'sessions:create',
     DELETE: 'sessions:delete',
     GET_MESSAGES: 'sessions:getMessages',
+    COLD_HISTORY_PAGE: 'sessions:coldHistoryPage',
     SEND_MESSAGE: 'sessions:sendMessage',
     CANCEL: 'sessions:cancel',
     // Legacy name of STOP_BACKGROUND_TASK for shells (older clients); same handler.

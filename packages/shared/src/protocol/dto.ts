@@ -41,6 +41,11 @@ export type SessionStatus = string
 
 export type BuiltInStatusId = 'todo' | 'in-progress' | 'needs-review' | 'done' | 'cancelled'
 
+/** A read-only history projection, never an authoritative Session snapshot. */
+export type ColdHistoryPage =
+  | { kind: 'page'; messages: Message[]; next: string | null }
+  | { kind: 'unavailable'; reason: 'state-changed' | 'oversized' }
+
 export interface SessionInventoryRequest {
   page: true
   next?: string

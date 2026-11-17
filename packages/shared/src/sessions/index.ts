@@ -131,3 +131,5 @@ export {
 } from './bundle.ts';
 
 
+
+export { readColdHistoryWindow, type DiskCursor } from './cold-history-window'
