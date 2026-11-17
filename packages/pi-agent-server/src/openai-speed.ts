@@ -5,6 +5,9 @@ import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { assertOpenAISpeedAllowed, getOpenAIServiceTier, getOpenAISpeedMultipliers,
   type OpenAISpeed } from '../../shared/src/agent/openai-speed.ts';
 
+const CODEX_BASE_URLS = new Set(['https://chatgpt.com/backend-api', 'https://chatgpt.com/backend-api/codex',
+  'https://chatgpt.com/backend-api/codex/responses']);
+
 export interface SpeedReport {
   requested: OpenAISpeed;
   applied: string | null;
@@ -33,14 +36,33 @@ export function wrapOpenAISpeedStream(original: StreamFn,
       && selected.provider === model.provider;
     if (!native && selected.speed === 'standard') return original(model, context, options);
     if (selected.speed !== 'standard' && (model.id !== selected.model?.replace(/^pi\//, '') ||
-        model.provider !== selected.provider || !['openai-responses', 'openai-codex-responses'].includes(model.api))) {
+        model.provider !== selected.provider || model.api !== (model.provider === 'openai-codex' ? 'openai-codex-responses' : 'openai-responses'))) {
       throw new Error('Requested premium speed requires the exact selected native model/provider. No model, tier, or billing fallback was performed.');
     }
     const requestedTier = getOpenAIServiceTier(selected.speed);
+    // The official Codex client sends this advisory routing header *as well as*
+    // service_tier for native OAuth inference (openai/codex#37345). Never use
+    // it as evidence of entitlement or of the model/tier actually served.
+    const codexUltra = selected.speed === 'ultrafast' && model.provider === 'openai-codex';
+    const hint = `model=${model.id};tier=${requestedTier}`;
+    if (codexUltra) {
+      if (!CODEX_BASE_URLS.has(model.baseUrl.replace(/\/+$/, ''))) {
+        throw new Error('Ultrafast routing requires the native ChatGPT Codex endpoint. No request sent.');
+      }
+      for (const headers of [model.headers, options?.headers]) {
+        for (const [name, value] of Object.entries(headers ?? {})) {
+          if ((name.toLowerCase() === 'x-codex-routing-hint' && value !== hint) ||
+              (name.toLowerCase() === 'x-codex-guardian' && value?.trim().toLowerCase() === 'reviewer')) {
+            throw new Error('Explicit Ultrafast conflicts with existing Codex request routing. No request sent.');
+          }
+        }
+      }
+    }
     let applied: string | null = null;
     let terminalObserved = false;
     const underlying = await original(model, context, {
       ...options,
+      ...(codexUltra ? { headers: { ...options?.headers, 'x-codex-routing-hint': hint } } : {}),
       // Premium requests are never automatically retried by the provider layer.
       ...(selected.speed !== 'standard' ? { maxRetries: 0, transport: 'sse' as const } : {}),
       onPayload: async (payload, requestModel) => {
@@ -78,7 +100,7 @@ export function wrapOpenAISpeedStream(original: StreamFn,
             scaleCostEstimate(message, estimatedMultiplier / sdkMultiplier);
             if (selected.speed !== 'standard' || verification === 'mismatch') {
               const detail = verification === 'confirmed'
-                ? `Provider confirmed ${applied}.`
+                ? `Provider terminal reported the requested tier (${applied}).`
                 : verification === 'mismatch'
                   ? `Provider returned ${applied}, not requested ${requestedTier}; no fallback or automatic retry was performed.`
                   : `Provider did not confirm the requested service tier${terminalObserved ? '' : ' (no terminal response metadata)'}. Availability, application and actual billing remain unverified.`;
@@ -89,7 +111,8 @@ export function wrapOpenAISpeedStream(original: StreamFn,
             }
             if (verification === 'mismatch') {
               message.stopReason = 'error';
-              message.errorMessage = `OpenAI service tier mismatch: requested ${requestedTier}, received ${applied}. Usage may have been consumed; no automatic fallback/retry.`;
+              const uncertainty = model.provider === 'openai-codex' ? ' Actual execution tier is unverified.' : '';
+              message.errorMessage = `OpenAI service tier mismatch: requested ${requestedTier}, received ${applied}.${uncertainty} Usage may have been consumed; no automatic fallback/retry.`;
               output.push({ type: 'error', reason: 'error', error: message });
               output.end();
               return;

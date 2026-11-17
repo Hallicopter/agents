@@ -8,6 +8,7 @@ import { getOpenAI62Models } from '../../shared/src/config/openai-62-models.ts';
 import { assertOpenAISpeedAllowed, getOpenAISpeedOptions, getOpenAISpeedMultipliers,
   getOpenAISpeedWarning, ULTRAFAST_PROMO_END, type OpenAISpeed } from '../../shared/src/agent/openai-speed.ts';
 import { configureOpenAISpeedBudget, wrapOpenAISpeedStream, type SpeedReport } from './openai-speed.ts';
+import capturedTerminal from './test-fixtures/openai-ultrafast-provider-default.json';
 import { capturedSpeedEvents } from './test-fixtures/openai-speed-captured';
 
 const context = { messages: [{ role: 'user' as const, content: 'offline fixture', timestamp: 0 }] };
@@ -134,6 +135,61 @@ describe('native tier forwarding and truthful accounting (offline)', () => {
     expect(payload.service_tier).toBe('ultrafast');
     expect(payload.model).toBe(model.id);
     expect(result.errorMessage).toContain('OFFLINE STOP');
+    expect(calls).toBe(0);
+  });
+  it('mirrors the native Ultrafast SSE routing hint without changing SDK identity or trusting the hint (offline)', async () => {
+    const fixture = `test.${btoa(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'offline-test' } }))}.test`;
+    const sent: { url: string; headers: Headers; body: any }[] = [];
+    const original: StreamFn = (m, ctx, opts) => codexSimple(m, ctx, { ...opts, env: {}, apiKey: fixture,
+      fetch: async (url, init) => {
+        const headers = new Headers(init?.headers);
+        const json = headers.get('content-encoding') === 'zstd'
+          ? new TextDecoder().decode(Bun.zstdDecompressSync(init!.body as Uint8Array)) : String(init?.body);
+        sent.push({ url: String(url), headers, body: JSON.parse(json) });
+        // Real sanitized terminal, deliberately unchanged by our requested hint.
+        return new Response(`data: ${JSON.stringify(capturedTerminal)}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    const options = { transport: 'sse' as const, maxRetries: 0, sessionId: 'offline-fixed', headers: { 'x-test-preserved': 'yes' } };
+    await (await original(model, context, options)).result();
+    const reports: SpeedReport[] = [];
+    const result = await (await wrapOpenAISpeedStream(original, () => selected('ultrafast'), r => reports.push(r))(model, context, options)).result();
+    expect(sent).toHaveLength(2); // one SDK baseline, one wrapped call; no network
+    const [baseline, wrapped] = sent;
+    expect(wrapped!.url).toBe('https://chatgpt.com/backend-api/codex/responses');
+    expect(wrapped!.body).toMatchObject({ model: 'gpt-6.2-sol', service_tier: 'ultrafast' });
+    expect(baseline!.headers.has('x-codex-routing-hint')).toBe(false);
+    expect(wrapped!.headers.get('x-codex-routing-hint')).toBe('model=gpt-6.2-sol;tier=ultrafast');
+    const rest = new Headers(wrapped!.headers); rest.delete('x-codex-routing-hint');
+    expect([...rest.entries()].sort()).toEqual([...baseline!.headers.entries()].sort()); // synthetic auth only
+    expect(result.stopReason).toBe('error');
+    expect(result.errorMessage).toContain('received default. Actual execution tier is unverified.');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ applied: 'default', verification: 'mismatch', tokenCostEstimateMultiplier: 1 });
+  });
+  it('does not add a Codex Ultrafast hint to API, Fast, Standard, or a summary', async () => {
+    const apiModel = getOpenAI62Models('openai').find(m => m.id === model.id)!;
+    for (const [m, speed, sessionId] of [[apiModel, 'ultrafast', 'main'], [model, 'fast', 'main'],
+      [model, 'standard', 'main'], [model, 'ultrafast', 'summary']] as const) {
+      const seen: unknown[] = [];
+      const original: StreamFn = (rm, ctx, opts) => {
+        seen.push(opts?.headers); return fakeNative().original(rm, ctx, opts);
+      };
+      await (await wrapOpenAISpeedStream(original, () => ({ ...selected(speed, m), sessionId: 'main' }), () => {})(m, context, { sessionId })).result();
+      expect(seen).toEqual([undefined]);
+    }
+  });
+  it('blocks unsupported OAuth Ultrafast routes before invoking the SDK', async () => {
+    let calls = 0;
+    const original: StreamFn = () => { ++calls; throw new Error('Unexpected SDK invocation'); };
+    for (const m of [{ ...model, baseUrl: 'https://example.invalid/backend-api' },
+      { ...model, baseUrl: 'https://chatgpt.com/other' }, { ...model, api: 'openai-responses' as const },
+      { ...model, id: 'gpt-6.2-astra' }, { ...model, headers: { 'X-Codex-Guardian': 'reviewer' } }]) {
+      await expect(wrapOpenAISpeedStream(original, () => selected('ultrafast', m), () => {})(m, context)).rejects.toThrow();
+    }
+    for (const headers of [{ 'X-CODEX-ROUTING-HINT': 'model=other;tier=priority' }, { 'x-codex-guardian': 'reviewer' }]) {
+      await expect(wrapOpenAISpeedStream(original, () => selected('ultrafast'), () => {})(model, context, { headers })).rejects.toThrow();
+    }
     expect(calls).toBe(0);
   });
   it('disables implicit retries/cache warming for premium, restores existing Standard policy', () => {
