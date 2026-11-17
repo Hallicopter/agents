@@ -12,7 +12,7 @@ const event=(type:string,seq:number,rest:any)=>({type,sessionId:'s',historyEpoch
 afterEach(()=>{forgetHistory();globalThis.window=original})
 it('open streaming, two equal submissions, late acknowledgement, cancel, and authoritative stale reconnect',async()=>{
  const store=createStore();store.set(windowWorkspaceIdAtom,'w');store.set(sessionAtomFamily('s'),{...metadata,hasUnread:false,messages:[user('a',true),user('b',true)]} as any)
- const approval={requestId:'request',sessionId:'s'};let resolve!:(p:any)=>void,reads=0
+ const approval={requestId:'request',sessionId:'s',toolName:'Synthetic tool',description:'Synthetic approval'};let resolve!:(p:any)=>void,reads=0
  globalThis.window={electronAPI:{isChannelAvailable:()=>true,getSessionHistoryWindow:()=>{reads++;return new Promise(r=>resolve=r)}}} as any
  const open=store.set(ensureSessionMessagesLoadedAtom,'s');const text=(i:number,delta:string)=>event('text_delta',i,{delta,turnId:'turn'})
  observeHistory('s',text(10,'A'));observeHistory('s',text(11,'B'));observeHistory('s',event('user_message',12,{message:user('b'),status:'queued',optimisticMessageId:'b'}))
