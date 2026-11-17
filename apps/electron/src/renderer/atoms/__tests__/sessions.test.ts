@@ -33,18 +33,16 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   } as Session
 }
 
+const originalWindow = globalThis.window
+afterEach(() => {
+  if (originalWindow) globalThis.window = originalWindow
+  else {
+    // @ts-expect-error test cleanup for window shim
+    delete globalThis.window
+  }
+})
+
 describe('session message loading atoms', () => {
-  const originalWindow = globalThis.window
-
-  afterEach(() => {
-    if (originalWindow) {
-      globalThis.window = originalWindow
-    } else {
-      // @ts-expect-error test cleanup for window shim
-      delete globalThis.window
-    }
-  })
-
   it('replaceLoadedSessionAtom marks authoritative full sessions as loaded', () => {
     const store = createStore()
     const sessionId = 'session-1'
