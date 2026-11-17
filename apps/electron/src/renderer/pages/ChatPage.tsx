@@ -411,6 +411,13 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // Use isAsyncOperationOngoing for shimmer effect (sharing, updating share, revoking, title regeneration)
   const isAsyncOperationOngoing = session?.isAsyncOperationOngoing || sessionMeta?.isAsyncOperationOngoing || false
 
+  // A navigation stub must never enable a composer using fallback model/connection settings.
+  if (session?.inventoryPartial) return (
+    <div className="flex h-full items-center justify-center gap-2" role="status">
+      {messagesLoadError ? <>{messagesLoadError} <button onClick={handleRetryMessagesLoad}>{t('common.retry')}</button></> : 'Loading chat settings…'}
+    </div>
+  )
+
   // Handle missing session - loading or deleted
   if (!session) {
     if (sessionMeta) {

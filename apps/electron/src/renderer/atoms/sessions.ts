@@ -402,6 +402,8 @@ export const refreshSessionsMetadataAtom = atom(
     const unloadedIds: string[] = []
     for (const session of sessions) {
       const currentSession = get(sessionAtomFamily(session.id))
+      // Do not downgrade an already hydrated chat to a navigational placeholder.
+      if (session.inventoryPartial && currentSession && !currentSession.inventoryPartial) continue
       const shouldPreserveMessages = !!currentSession && loadedSessionIds.has(session.id)
       const nextSession = shouldPreserveMessages && currentSession
         ? { ...session, messages: currentSession.messages }
@@ -429,7 +431,7 @@ export const refreshSessionsMetadataAtom = atom(
       ? new Map<string, SessionMeta>()
       : new Map(get(sessionMetaMapAtom))
     for (const session of sessions) {
-      nextMetaMap.set(session.id, extractSessionMeta(session))
+      nextMetaMap.set(session.id, extractSessionMeta(get(sessionAtomFamily(session.id)) ?? session))
     }
     set(sessionMetaMapAtom, nextMetaMap)
 
@@ -622,6 +624,7 @@ async function loadSessionMessages(
   }
 
   // Create the loading promise with all the fetch and update logic
+  const beforeLoad = get(sessionAtomFamily(sessionId))
   const workspace = get(windowWorkspaceIdAtom)
   let loadPromise!: Promise<Session | null>
   loadPromise = (async (): Promise<Session | null> => {
@@ -629,6 +632,7 @@ async function loadSessionMessages(
     const loadedSession = await window.electronAPI.getSessionMessages(sessionId, { scoped: true })
     if (workspace !== get(windowWorkspaceIdAtom) || sessionLoadingPromises.get(sessionId) !== loadPromise) return null
     if (!loadedSession) {
+      if (get(sessionAtomFamily(sessionId))?.inventoryPartial) return null
       return get(sessionAtomFamily(sessionId))
     }
 
@@ -642,9 +646,20 @@ async function loadSessionMessages(
       && existingSession.messages.length > 0
       && (!loadedSession.messages || loadedSession.messages.length === 0)
 
-    const mergedSession = existingSession
+    // A stub is not authoritative for missing fields. Start from the complete reply,
+    // replaying only optimistic/live field changes made while this RPC was in flight.
+    let hydrated = existingSession
+    if (existingSession?.inventoryPartial) {
+      hydrated = { ...loadedSession }
+      for (const key of Object.keys(existingSession) as (keyof Session)[]) {
+        if (key !== 'inventoryPartial' && key !== 'messages' && !Object.is(existingSession[key], beforeLoad?.[key])) {
+          Object.assign(hydrated, { [key]: existingSession[key] })
+        }
+      }
+    }
+    const mergedSession = hydrated && existingSession
       ? {
-          ...existingSession,
+          ...hydrated,
           // CRITICAL: Don't clobber messages if session is actively streaming
           // AND already has messages in the atom. Streaming events update the atom
           // directly and may contain messages the IPC response doesn't know about
@@ -663,7 +678,7 @@ async function loadSessionMessages(
           sessionFolderPath: loadedSession.sessionFolderPath ?? existingSession.sessionFolderPath,
         }
       : loadedSession
-    if (!get(sessionMetaMapAtom).has(sessionId)) set(refreshSessionsMetadataAtom, { sessions: [mergedSession], loadedSessionIds: get(loadedSessionsAtom), removeMissing: false })
+    if (existingSession?.inventoryPartial || !get(sessionMetaMapAtom).has(sessionId)) set(refreshSessionsMetadataAtom, { sessions: [mergedSession], loadedSessionIds: get(loadedSessionsAtom), removeMissing: false })
     else set(sessionAtomFamily(sessionId), mergedSession)
 
     // Update only lastFinalMessageId in metadata (now computable from loaded messages).

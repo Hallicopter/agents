@@ -16,6 +16,6 @@ export function openInventory(priorityIds: string[], get: (request: SessionInven
     if (result.endRow) {
       sessions = [...sessions, JSON.parse(fragments.join('')) as Session]; fragments = []
     }
-    return { sessions, more: next !== null }
+    return { sessions, more: next !== null, removedId: result.removedId }
   }
 }

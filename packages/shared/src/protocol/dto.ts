@@ -51,6 +51,7 @@ export interface SessionInventoryPage {
   sessions: Session[]
   next: string | null
   fragment?: string
+  removedId?: string
   discardFragments?: boolean
   endRow?: boolean
 }
@@ -60,6 +61,8 @@ export interface SessionInventoryPage {
  * Extends core Session with messages array and processing state.
  */
 export interface Session {
+  /** Navigable placeholder; full metadata arrives with transcript or inventory completion. */
+  inventoryPartial?: true
   id: string
   workspaceId: string
   workspaceName: string

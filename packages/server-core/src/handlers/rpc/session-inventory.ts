@@ -5,7 +5,7 @@ const MAX_ROWS = 100
 
 /** A navigable stub for exceptional rows; never mark their inventory complete until the full row arrives. */
 export function navigationSummary(s: Session): Session {
-  return { id: s.id, workspaceId: s.workspaceId, workspaceName: s.workspaceName.slice(0, 128),
+  return { inventoryPartial: true, id: s.id, workspaceId: s.workspaceId, workspaceName: s.workspaceName.slice(0, 128),
     name: s.name?.slice(0, 256), preview: s.preview?.slice(0, 256), lastMessageAt: s.lastMessageAt,
     messages: [], isProcessing: s.isProcessing, hidden: s.hidden, isArchived: s.isArchived,
     lastFinalMessageId: s.lastFinalMessageId, isFlagged: s.isFlagged, sessionStatus: s.sessionStatus, projectId: s.projectId,
@@ -37,7 +37,7 @@ export function* inventoryPages(ids: readonly string[], snapshot: (id: string) =
       }
       const latest = snapshot(id)
       if (!latest || JSON.stringify(latest) !== json) {
-        yield { sessions: [], discardFragments: true }
+        yield { sessions: [], discardFragments: true, ...(!latest ? { removedId: id } : {}) }
         continue
       }
       yield { sessions: [], endRow: true }

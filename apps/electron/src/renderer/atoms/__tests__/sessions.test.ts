@@ -298,3 +298,18 @@ it('ignores old transcript completion after a workspace reset and hydrates metad
   expect(store.get(sessionMetaMapAtom).get('target')?.name).toBe('Parent of task')
   expect(store.get(loadedSessionsAtom).has('target')).toBe(true)
 })
+
+it('upgrades a giant-row stub with all authoritative fields but retains an in-flight rename', async () => {
+  const store = createStore(), stub = makeSession({ id: 'giant', inventoryPartial: true })
+  store.set(initializeSessionsAtom, [stub])
+  let finish!: (s: Session) => void
+  globalThis.window = { electronAPI: { getSessionMessages: () => new Promise(resolve => { finish = resolve }) } } as unknown as typeof window
+  const pending = store.set(ensureSessionMessagesLoadedAtom, 'giant')
+  store.set(sessionAtomFamily('giant'), { ...stub, name: 'live rename' })
+  const full = makeSession({ id: 'giant', model: 'selected-model', llmConnection: 'selected-connection', workingDirectory: '/fixture', labels: ['urgent'], taskSlug: 'task', branchFromSessionId: 'parent', messages: [msg('m')] })
+  finish(full)
+  expect(await pending).toMatchObject({ ...full, name: 'live rename' })
+  expect(store.get(sessionMetaMapAtom).get('giant')?.labels).toEqual(['urgent'])
+  store.set(refreshSessionsMetadataAtom, { sessions: [stub], removeMissing: false, loadedSessionIds: store.get(loadedSessionsAtom) })
+  expect(store.get(sessionAtomFamily('giant'))).toMatchObject({ ...full, name: 'live rename' })
+})

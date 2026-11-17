@@ -518,10 +518,11 @@ function MainApp() {
     setInventoryStatus('loading')
     const before = store.get(sessionMetaMapAtom)
     try {
-      const { sessions, more } = await scan.read()
+      const { sessions, more, removedId } = await scan.read()
       if (inventory.current !== scan) return
       const current = store.get(sessionMetaMapAtom)
       // A live event/selection may have published newer metadata during the RPC.
+      if (removedId && current.has(removedId) && before.get(removedId) === current.get(removedId)) removeSession(removedId)
       const rows = sessions.filter(s => !scan.deleted.has(s.id) && before.get(s.id) === current.get(s.id))
       const meta = store.set(refreshSessionsMetadataAtom, {
         sessions: rows, loadedSessionIds: store.get(loadedSessionsAtom), removeMissing: false,
@@ -532,7 +533,7 @@ function MainApp() {
       setSessionsLoaded(true)
       return meta
     } finally { scan.busy = false }
-  }, [store])
+  }, [store, removeSession])
 
   const loadSessionsFromServer = useCallback(async (selected?: string | null) => {
     setSessionLoadError(null)

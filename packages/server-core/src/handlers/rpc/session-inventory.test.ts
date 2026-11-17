@@ -56,3 +56,13 @@ for (const count of [100, 2]) test(`fresh scope and value after count/byte bound
   changed = true
   expect(pages.next().value.sessions).toEqual([row(String(count), 'updated')])
 })
+
+test('confirms the exact oversized row that leaves scope after its navigable stub', async () => {
+  let present = true
+  const pages = inventoryPages(['giant', 'unrelated'], id => id === 'unrelated' ? row(id) : present ? row(id, 'x'.repeat(500000)) : null)
+  const read = openInventory([], async () => { const p = pages.next(); return { ...p.value, next: p.done ? null : 'next' } })
+  expect((await read()).sessions[0]?.inventoryPartial).toBe(true)
+  present = false
+  expect((await read()).removedId).toBe('giant')
+  expect((await read()).sessions.map(s => s.id)).toEqual(['unrelated'])
+})
