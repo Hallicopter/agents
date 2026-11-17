@@ -485,8 +485,10 @@ function MainApp() {
 
   const refreshSessionFromServer = useCallback(async (sessionId: string): Promise<'refreshed' | 'preserved_stale_messages' | 'failed'> => {
     try {
+      const workspace = store.get(windowWorkspaceIdAtom)
+      const scan = inventory.current
       const fresh = await window.electronAPI.getSessionMessages(sessionId)
-      if (!fresh) return 'failed'
+      if (!fresh || workspace !== store.get(windowWorkspaceIdAtom) || scan !== inventory.current || scan?.deleted.has(sessionId)) return 'failed'
 
       const prevSession = store.get(sessionAtomFamily(sessionId))
       const preservedStaleMessages = !!prevSession && prevSession.messages.length > 0 && (!fresh.messages || fresh.messages.length === 0)
@@ -557,6 +559,18 @@ function MainApp() {
       setSessionsLoaded(true)
     }
   }, [initialSessionId, windowWorkspaceId, readInventoryPage, store])
+
+  const ensureInventoryTarget = useCallback(async (id: string) => {
+    const scan = inventory.current
+    if (!scan?.more || scan.deleted.has(id) || store.get(sessionMetaMapAtom).has(id)) return
+    const response = await window.electronAPI.getSessions({ page: true, lookupId: id })
+    if (inventory.current !== scan || scan.deleted.has(id) || store.get(sessionMetaMapAtom).has(id)) return
+    const row = (Array.isArray(response) ? response : response.sessions).find(s => s.id === id)
+    if (row) {
+      store.set(refreshSessionsMetadataAtom, { sessions: [row], loadedSessionIds: store.get(loadedSessionsAtom), removeMissing: false })
+      syncSessionOptionsFromSession(row)
+    }
+  }, [store, syncSessionOptionsFromSession])
 
   const loadMoreSessions = useCallback(async (all: boolean) => {
     const scan = inventory.current
@@ -1039,6 +1053,7 @@ function MainApp() {
       // Refresh full message content only for the active session plus any
       // session still marked processing after the metadata refresh.
       for (const sessionId of refreshIds) {
+        if (inventory.current !== scan) return
         let refreshResult = await refreshSessionFromServer(sessionId)
         if (refreshResult !== 'refreshed') {
           // Server may need time to restart session subprocess after reconnect,
@@ -1046,12 +1061,14 @@ function MainApp() {
           for (const delay of [2000, 4000]) {
             console.warn(`[App] Retrying session refresh for ${sessionId} after ${delay}ms (${refreshResult})`)
             await new Promise(r => setTimeout(r, delay))
+            if (inventory.current !== scan) return
             refreshResult = await refreshSessionFromServer(sessionId)
             if (refreshResult === 'refreshed') break
           }
         }
       }
 
+      if (inventory.current !== scan) return
       // Final fallback: if the active session is still empty, force a reload
       // even when the session is already marked loaded.
       if (sessionSelection.selected) {
@@ -2005,6 +2022,7 @@ function MainApp() {
           getDraft={getDraft}
           onAutoDeleteEmptySession={handleAutoDeleteEmptySession}
           isReady={appState === 'ready'}
+          ensureInventoryTarget={ensureInventoryTarget}
           isSessionsReady={sessionsLoaded}
           remoteWorkspaceId={windowRemoteWorkspaceId}
         >

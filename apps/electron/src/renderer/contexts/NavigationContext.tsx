@@ -148,6 +148,7 @@ interface NavigationProviderProps {
   isReady?: boolean
   /** Whether session metadata has been initialized (required for deterministic route restoration) */
   isSessionsReady?: boolean
+  ensureInventoryTarget?: (id: string) => Promise<void>
   /** Remote workspace ID — when set, sessions with this ID are also considered part of the workspace */
   remoteWorkspaceId?: string | null
 }
@@ -163,6 +164,7 @@ export function NavigationProvider({
   onAutoDeleteEmptySession,
   isReady = true,
   isSessionsReady = true,
+  ensureInventoryTarget,
   remoteWorkspaceId,
 }: NavigationProviderProps) {
   const { t } = useTranslation()
@@ -498,7 +500,7 @@ export function NavigationProvider({
       for (const prevId of prevVisibleSessionIdsRef.current) {
         if (!currentIds.has(prevId)) {
           const meta = store.get(sessionMetaMapAtom).get(prevId)
-          const isEmpty = meta && !meta.lastFinalMessageId && !meta.name && !meta.isProcessing
+          const isEmpty = meta && !meta.messageCount && !meta.lastFinalMessageId && !meta.name && !meta.isProcessing
           const hasDraft = getDraft?.(prevId)?.trim()
           if (isEmpty && !hasDraft) {
             onAutoDeleteEmptySession(prevId)
@@ -863,8 +865,11 @@ export function NavigationProvider({
   // NAVIGATE
   // =========================================================================
 
+  const navigationGeneration = useRef(0)
+  useEffect(() => () => { navigationGeneration.current++ }, [workspaceId])
   const navigate = useCallback(
     async (route: Route, options?: NavigateOptions) => {
+      const generation = ++navigationGeneration.current
       // Reset auto-select suppression on any normal navigation
       if (!options?.skipAutoSelect) {
         suppressAutoSelectRef.current = false
@@ -887,6 +892,14 @@ export function NavigationProvider({
         return
       }
 
+      const newNavState = parseRouteToNavigationState(route)
+      if (newNavState && isSessionsNavigation(newNavState) && newNavState.details && ensureInventoryTarget
+        && !store.get(sessionMetaMapAtom).has(newNavState.details.sessionId)) {
+        try { await ensureInventoryTarget(newNavState.details.sessionId) }
+        catch { if (generation === navigationGeneration.current) toast.error('Could not load that chat'); return }
+        if (generation !== navigationGeneration.current) return
+      }
+
       // For view routes with newPanel: push a panel using lane-aware routing.
       //
       // Important distinction:
@@ -906,8 +919,6 @@ export function NavigationProvider({
       // navigator-only view in compact mode, App-page fallback on desktop. We
       // intentionally do NOT auto-redirect to the last-visited subpage; doing so
       // would defeat the compact-mode drill-in UX.
-      const newNavState = parseRouteToNavigationState(route)
-
       // Suppress auto-select effect
       if (options?.skipAutoSelect) {
         suppressAutoSelectRef.current = true
@@ -928,7 +939,7 @@ export function NavigationProvider({
         store.set(updateFocusedPanelRouteAtom, finalRoute)
       }
     },
-    [isReady, handleActionNavigation, resolveAutoSelection, store, pushPanel, workspaceId]
+    [isReady, handleActionNavigation, resolveAutoSelection, store, pushPanel, workspaceId, ensureInventoryTarget]
   )
 
   // =========================================================================

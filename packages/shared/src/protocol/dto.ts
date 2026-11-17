@@ -41,22 +41,24 @@ export type SessionStatus = string
 
 export type BuiltInStatusId = 'todo' | 'in-progress' | 'needs-review' | 'done' | 'cancelled'
 
-/**
- * Electron-specific Session type (includes runtime state).
- * Extends core Session with messages array and processing state.
- */
 export interface SessionInventoryRequest {
   page: true
   next?: string
+  lookupId?: string
   priorityIds?: string[]
 }
 export interface SessionInventoryPage {
   sessions: Session[]
   next: string | null
   fragment?: string
+  discardFragments?: boolean
   endRow?: boolean
 }
 
+/**
+ * Electron-specific Session type (includes runtime state).
+ * Extends core Session with messages array and processing state.
+ */
 export interface Session {
   id: string
   workspaceId: string

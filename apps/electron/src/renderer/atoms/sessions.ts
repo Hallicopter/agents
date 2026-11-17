@@ -324,6 +324,7 @@ export const updateStreamingContentAtom = atom(
 export const initializeSessionsAtom = atom(
   null,
   (get, set, sessions: Session[]) => {
+    sessionLoadingPromises.clear()
     // Clean up stale atom family entries from previous workspace.
     // Without this, switching workspaces leaves orphaned atoms in memory
     // and components subscribed to old session IDs see stale/empty data.
@@ -475,6 +476,7 @@ export const addSessionAtom = atom(
 export const removeSessionAtom = atom(
   null,
   (get, set, sessionId: string) => {
+    sessionLoadingPromises.delete(sessionId)
     // Clear session atom value first
     set(sessionAtomFamily(sessionId), null)
     // Remove atom from family cache to allow GC of the atom and its stored value
@@ -620,9 +622,12 @@ async function loadSessionMessages(
   }
 
   // Create the loading promise with all the fetch and update logic
-  const loadPromise = (async (): Promise<Session | null> => {
+  const workspace = get(windowWorkspaceIdAtom)
+  let loadPromise!: Promise<Session | null>
+  loadPromise = (async (): Promise<Session | null> => {
     // Fetch messages from main process
-    const loadedSession = await window.electronAPI.getSessionMessages(sessionId)
+    const loadedSession = await window.electronAPI.getSessionMessages(sessionId, { scoped: true })
+    if (workspace !== get(windowWorkspaceIdAtom) || sessionLoadingPromises.get(sessionId) !== loadPromise) return null
     if (!loadedSession) {
       return get(sessionAtomFamily(sessionId))
     }
@@ -658,7 +663,8 @@ async function loadSessionMessages(
           sessionFolderPath: loadedSession.sessionFolderPath ?? existingSession.sessionFolderPath,
         }
       : loadedSession
-    set(sessionAtomFamily(sessionId), mergedSession)
+    if (!get(sessionMetaMapAtom).has(sessionId)) set(refreshSessionsMetadataAtom, { sessions: [mergedSession], loadedSessionIds: get(loadedSessionsAtom), removeMissing: false })
+    else set(sessionAtomFamily(sessionId), mergedSession)
 
     // Update only lastFinalMessageId in metadata (now computable from loaded messages).
     // Don't replace the full meta entry — other fields are maintained through
@@ -692,8 +698,7 @@ async function loadSessionMessages(
   try {
     return await loadPromise
   } finally {
-    // Always clean up the cache, whether success or failure
-    sessionLoadingPromises.delete(sessionId)
+    if (sessionLoadingPromises.get(sessionId) === loadPromise) sessionLoadingPromises.delete(sessionId)
   }
 }
 

@@ -38,9 +38,21 @@ test('giant multibyte and escaped row is lossless across bounded frames; deleted
   })
   const all: Session[] = []; let more = true
   while (more) { const p = await read(); all.push(...p.sessions); more = p.more }
-  expect(all).toEqual([big, row('next')])
+  expect(all[0].id).toBe('big') // immediately navigable before its fragments arrive
+  expect(all[0].preview!.length).toBeLessThan(300)
+  expect(all.slice(1)).toEqual([big, row('next')])
 })
 
 test('older server response is complete without a follow-up', async () => {
   expect(await openInventory([], async () => [row('legacy')])()).toEqual({ sessions: [row('legacy')], more: false })
+})
+
+for (const count of [100, 2]) test(`fresh scope and value after count/byte boundary (${count})`, () => {
+  const ids = Array.from({ length: count + 2 }, (_, i) => `${i}`)
+  let changed = false
+  const pages = inventoryPages(ids, id => changed && id === String(count + 1) ? null
+    : row(id, changed ? 'updated' : 'x'.repeat(count === 2 ? 85_000 : 10)))
+  expect(pages.next().value.sessions.length).toBe(count)
+  changed = true
+  expect(pages.next().value.sessions).toEqual([row(String(count), 'updated')])
 })

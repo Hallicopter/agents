@@ -282,3 +282,19 @@ describe('session label assignment hydration', () => {
     expect(store.get(sessionAtomFamily(original.id))?.messages[0]?.content).toBe('content:raw')
   })
 })
+
+it('ignores old transcript completion after a workspace reset and hydrates metadata for a new direct target', async () => {
+  const store = createStore()
+  let finish!: (s: Session) => void
+  globalThis.window = { electronAPI: { getSessionMessages: () => new Promise(resolve => { finish = resolve }) } } as unknown as typeof window
+  const pending = store.set(ensureSessionMessagesLoadedAtom, 'old')
+  store.set(initializeSessionsAtom, [])
+  finish(makeSession({ id: 'old' }))
+  expect(await pending).toBeNull()
+  expect(store.get(sessionMetaMapAtom).size).toBe(0)
+  const direct = store.set(ensureSessionMessagesLoadedAtom, 'target')
+  finish(makeSession({ id: 'target', name: 'Parent of task' }))
+  await direct
+  expect(store.get(sessionMetaMapAtom).get('target')?.name).toBe('Parent of task')
+  expect(store.get(loadedSessionsAtom).has('target')).toBe(true)
+})

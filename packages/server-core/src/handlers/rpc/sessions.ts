@@ -1,4 +1,4 @@
-import { inventoryPages } from './session-inventory'
+import { inventoryPages, navigationSummary, INVENTORY_BYTES } from './session-inventory'
 import type { SessionInventoryRequest } from '@craft-agent/shared/protocol'
 import { readFile, writeFile, stat } from 'fs/promises'
 import { join } from 'path'
@@ -154,6 +154,12 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
     const workspaceId = ctx.workspaceId ?? windowWorkspaceId
     if (request?.page === true) {
       const scope = workspaceId ?? undefined
+      if (typeof request.lookupId === 'string') {
+        const row = sessionManager.getSessionSnapshot(request.lookupId)
+        end()
+        if (!row || (scope && row.workspaceId !== scope)) return { sessions: [], next: null }
+        return { sessions: [Buffer.byteLength(JSON.stringify(row)) < INVENTORY_BYTES ? row : navigationSummary(row)], next: null }
+      }
       let scan = scans.get(ctx.clientId)
       if (request.next !== undefined) {
         if (!scan || scan.workspaceId !== scope || request.next !== scan.token) throw new Error('Session inventory cursor expired; retry loading')
@@ -210,11 +216,13 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
   })
 
   // Get a single session with messages (for lazy loading)
-  server.handle(RPC_CHANNELS.sessions.GET_MESSAGES, async (_ctx, sessionId: string) => {
+  server.handle(RPC_CHANNELS.sessions.GET_MESSAGES, async (ctx, sessionId: string, options?: { scoped: true }) => {
+    const scope = options?.scoped && (ctx.workspaceId ?? (ctx.webContentsId != null ? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId) : undefined))
+    if (scope && sessionManager.getSessionSnapshot(sessionId)?.workspaceId !== scope) return null
     const end = perf.start('rpc.getSessionMessages')
     const session = await sessionManager.getSession(sessionId)
     end()
-    return session
+    return scope && session?.workspaceId !== scope ? null : session
   })
 
   // Create a new session
