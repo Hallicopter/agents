@@ -487,17 +487,11 @@ function MainApp() {
     try {
       const workspace = store.get(windowWorkspaceIdAtom)
       const scan = inventory.current
-      const fresh = await window.electronAPI.getSessionMessages(sessionId)
-      if (!fresh || workspace !== store.get(windowWorkspaceIdAtom) || scan !== inventory.current || scan?.deleted.has(sessionId)) return 'failed'
-
       const prevSession = store.get(sessionAtomFamily(sessionId))
-      const preservedStaleMessages = !!prevSession && prevSession.messages.length > 0 && (!fresh.messages || fresh.messages.length === 0)
-      const nextSession = preservedStaleMessages
-        ? { ...fresh, messages: prevSession.messages }
-        : fresh
-
-      clearStreamingState(sessionId)
-      replaceLoadedSession(nextSession)
+      const nextSession = await store.set(forceSessionMessagesReloadAtom, sessionId)
+      if (!nextSession || workspace !== store.get(windowWorkspaceIdAtom) || scan !== inventory.current || scan?.deleted.has(sessionId)) return 'failed'
+      const preservedStaleMessages = !!prevSession?.messages.length && nextSession.messages === prevSession.messages
+      if (!nextSession.isProcessing) clearStreamingState(sessionId)
       syncSessionOptionsFromSession(nextSession)
       void reconcilePermissionModeState(sessionId)
       return preservedStaleMessages ? 'preserved_stale_messages' : 'refreshed'
@@ -888,16 +882,10 @@ function MainApp() {
       if (event.type === 'session_created') {
         const workspace = store.get(windowWorkspaceIdAtom)
         const scan = inventory.current
-        window.electronAPI.getSessionMessages(sessionId)
+        store.set(forceSessionMessagesReloadAtom, sessionId)
           .then((createdSession: Session | null) => {
             if (workspace !== store.get(windowWorkspaceIdAtom) || scan?.deleted.has(sessionId) || inventory.current?.deleted.has(sessionId)) return
             if (createdSession) {
-              const existingMeta = store.get(sessionMetaMapAtom).has(sessionId)
-              if (existingMeta) {
-                replaceLoadedSession(createdSession)
-              } else {
-                addSession(createdSession)
-              }
               syncSessionOptionsFromSession(createdSession)
               return
             }

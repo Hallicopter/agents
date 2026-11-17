@@ -18,11 +18,14 @@ export function registerHistoryWindow(server: RpcServer, deps: HandlerDeps) {
     const { messages, ...metadata } = session
     // Preview is a list excerpt, not transcript content or a composer option.
     metadata.preview = metadata.preview?.slice(0, 240)
+    const published = !cursor && manager.getPublishedStream(id)
     const end = cursor ? messages.findIndex(m => m.id === cursor.before) : messages.length
     if (end < 0) throw Error('History anchor unavailable')
     let start = Math.max(0, end - 64)
     while (true) {
-      const page = { metadata, messages: messages.slice(start, end), older: start ? {revision, before: messages[start].id} : null }
+      const visible = messages.slice(start, end)
+      if (published) visible.push(published)
+      const page = { metadata, messages: visible, older: start ? {revision, before: messages[start].id} : null }
       if (Buffer.byteLength(serializeEnvelope({type:'response', channel, id:'x'.repeat(128), result:page})) <= 127 * 1024) return page
       if (end - start <= 1) throw Error('History detail exceeds the page budget; full history is required')
       start += Math.ceil((end - start) / 2)

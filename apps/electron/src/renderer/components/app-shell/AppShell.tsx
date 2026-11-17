@@ -1373,7 +1373,7 @@ function AppShellContent({
   // Ensure session messages are loaded when selected
   React.useEffect(() => {
     if (session.selected) {
-      ensureMessagesLoaded(session.selected)
+      void ensureMessagesLoaded(session.selected).catch(() => { /* ChatPage displays the load failure. */ })
     }
   }, [session.selected, ensureMessagesLoaded])
 

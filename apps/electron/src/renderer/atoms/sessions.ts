@@ -555,7 +555,7 @@ export const syncSessionsToAtomsAtom = atom(
       // CRITICAL: If session messages were lazy-loaded, atom has full messages
       // but React state may have empty array. Only skip if React would lose messages.
       // Allow sync when React has MORE messages (e.g., user just sent a message).
-      if (loadedSessions.has(session.id) && atomSession) {
+      if ((loadedSessions.has(session.id) || get(historyCoverageAtom).has(session.id)) && atomSession) {
         const atomMessageCount = atomSession.messages?.length ?? 0
         const reactMessageCount = session.messages?.length ?? 0
         // Skip sync only if React has fewer messages (would lose data)
@@ -664,7 +664,10 @@ async function loadSessionMessages(
     // tokenUsage and sessionFolderPath are only returned by getSession() (not getSessions()),
     // so they must be explicitly merged here to be available after app restart.
     const existingSession = get(sessionAtomFamily(sessionId))
-    if (page && existingSession?.messages !== beforeLoad?.messages && existingSession?.messages.length) {
+    if (page && existingSession?.messages.some(m => m.role === 'user' && m.isPending)) {
+      throw Error('Waiting for message confirmation; history was not replaced')
+    }
+    if (page && existingSession?.messages !== beforeLoad?.messages && (existingSession?.messages.length || beforeLoad?.messages.length)) {
       throw Error('New events arrived while loading; refresh recent messages')
     }
     const preservedStaleMessages = !!existingSession
@@ -674,7 +677,7 @@ async function loadSessionMessages(
     // A stub is not authoritative for missing fields. Start from the complete reply,
     // replaying only optimistic/live field changes made while this RPC was in flight.
     let hydrated = existingSession
-    if (existingSession?.inventoryPartial) {
+    if (existingSession && (existingSession.inventoryPartial || force || page)) {
       hydrated = { ...loadedSession }
       for (const key of Object.keys(existingSession) as (keyof Session)[]) {
         if (key !== 'inventoryPartial' && key !== 'messages' && !Object.is(existingSession[key], beforeLoad?.[key])) {
@@ -709,7 +712,7 @@ async function loadSessionMessages(
     // Update only lastFinalMessageId in metadata (now computable from loaded messages).
     // Don't replace the full meta entry — other fields are maintained through
     // optimistic updates and IPC events, and may be ahead of disk state.
-    const lastFinalMessageId = findLastFinalMessageId(loadedSession.messages)
+    const lastFinalMessageId = page ? page.metadata.lastFinalMessageId : findLastFinalMessageId(loadedSession.messages)
     if (lastFinalMessageId) {
       const metaMap = get(sessionMetaMapAtom)
       const existingMeta = metaMap.get(sessionId)

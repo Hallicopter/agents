@@ -2747,6 +2747,28 @@ export class SessionManager implements ISessionManager {
     managed._metadataWriteGuardUntil = Date.now() + METADATA_WRITE_GUARD_MS
   }
 
+  private readonly historyRevisions = new WeakMap<ManagedSession, string>()
+
+  getHistoryRevision(sessionId: string): string | null {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return null
+    let revision = this.historyRevisions.get(managed)
+    if (!revision) this.historyRevisions.set(managed, revision = randomUUID())
+    return revision
+  }
+
+  /** Already-published prefix only. The batch still in pendingDeltas will arrive
+   * through the ordinary event path; including it here would duplicate text. */
+  getPublishedStream(id: string): Message | undefined {
+    const m = this.sessions.get(id)
+    if (!m?.isProcessing || !m.streamingText) return
+    const unsent = this.pendingDeltas.get(id)?.delta ?? ''
+    const content = m.streamingText.slice(0, m.streamingText.length - unsent.length)
+    if (!content) return
+    return {id:`stream:${m.processingGeneration}:${m.streamingTurnId ?? ''}`, role:'assistant',
+      timestamp:m.lastMessageAt, content, turnId:m.streamingTurnId, isPending:true, isStreaming:true}
+  }
+
   /**
    * Persist a session to disk (async, with debouncing in the persistence queue).
    *
@@ -2759,16 +2781,6 @@ export class SessionManager implements ISessionManager {
    * `loadStoredSession` is synchronous (sync fs reads), so the entire path
    * stays sync — no microtask race window between the load and the enqueue.
    */
-  private readonly historyRevisions = new WeakMap<ManagedSession, string>()
-
-  getHistoryRevision(sessionId: string): string | null {
-    const managed = this.sessions.get(sessionId)
-    if (!managed) return null
-    let revision = this.historyRevisions.get(managed)
-    if (!revision) this.historyRevisions.set(managed, revision = randomUUID())
-    return revision
-  }
-
   private persistSession(managed: ManagedSession): void {
     this.historyRevisions.delete(managed)
     if (!managed.messagesLoaded) {
