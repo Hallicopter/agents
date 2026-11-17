@@ -68,6 +68,7 @@ import { resolvePiModel, isDeniedMiniModelId } from './model-resolution.ts';
 import { pickProviderAppropriateMiniModel } from './pick-mini-model.ts';
 import { queryMiniModel } from './mini-model-query.ts';
 import { registerTerraModel, requiresExactModel, verifyTerraResponse } from './terra-model.ts';
+import { registerOpenAI62Models } from './openai-62-models.ts';
 import {
   CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS,
   createCraftSettingsManager,
@@ -581,6 +582,7 @@ async function createAuthenticatedRuntime(): Promise<{
       });
       const modelRegistry = new PiModelRegistry(modelRuntime);
       registerTerraModel(modelRegistry);
+      registerOpenAI62Models(modelRegistry);
 
       // Register custom endpoint models dynamically via Pi SDK's registerProvider API.
       // This makes arbitrary OpenAI/Anthropic-compatible endpoints work through the Pi SDK

@@ -17,6 +17,7 @@ import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
 import type { Model, Api } from '@earendil-works/pi-ai';
 import type { ModelDefinition } from './models.ts';
 import { fromPiProviderId, toPiProviderId } from './pi-provider-ids.ts';
+import { addMissingOpenAI62Models } from './openai-62-models.ts';
 
 // ============================================
 // PI MODEL DISCOVERY
@@ -91,7 +92,7 @@ export function getPiModelsForAuthProvider(piAuthProvider: string): ModelDefinit
   try {
     const models = getModels(toPiProviderId(piAuthProvider) as Parameters<typeof getModels>[0]);
     if (models.length > 0) {
-      const definitions = models
+      const definitions = addMissingOpenAI62Models(piAuthProvider, models)
         .filter(m => !isExcludedPiModel(m.id))
         // Bedrock: exclude bare Claude models without region prefix — they're
         // always rejected by Bedrock which requires inference profiles (us.*/eu.*/global.*).
@@ -126,6 +127,11 @@ export function getAllPiModels(): ModelDefinition[] {
       );
     } catch {
       // Skip providers that fail
+    }
+  }
+  for (const provider of ['openai', 'openai-codex']) {
+    for (const model of getPiModelsForAuthProvider(provider)) {
+      if (!allModels.some(m => m.id === model.id)) allModels.push(model);
     }
   }
   const terra = getPiModelsForAuthProvider('openai-codex').find(m => m.id === 'pi/gpt-6.1-terra');
