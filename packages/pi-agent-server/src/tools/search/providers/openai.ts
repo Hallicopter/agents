@@ -43,6 +43,8 @@ export class ResponsesApiSearchProvider implements WebSearchProvider {
       },
       body: JSON.stringify({
         model: this.config.model || DEFAULT_SEARCH_MODEL,
+        // Pin native OpenAI utility billing without changing compatible endpoints.
+        ...(this.config.apiBase.replace(/\/+$/, '') === 'https://api.openai.com/v1' ? { service_tier: 'default' } : {}),
         tools: [{ type: 'web_search' }],
         input: `Search the web for: ${query}\n\nReturn the top ${count} results with title, URL, and a brief description.`,
       }),

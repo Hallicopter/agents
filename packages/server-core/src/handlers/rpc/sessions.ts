@@ -331,6 +331,9 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
           throw new Error(`Invalid thinking level: ${command.level}. Valid values: ${VALID_THINKING_LEVELS_LIST}`)
         }
         return sessionManager.setSessionThinkingLevel(sessionId, command.level)
+      case 'setOpenAISpeed':
+        // SessionManager validates untrusted IPC values, acknowledgement, policy and busy state.
+        return sessionManager.setSessionOpenAISpeed(sessionId, command.speed, command.acknowledged)
       case 'setCodingMode':
         if (typeof command.enabled !== 'boolean') {
           throw new Error(`Invalid coding mode value: ${String(command.enabled)}. Expected a boolean`)

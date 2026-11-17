@@ -98,6 +98,8 @@ export class ChatGPTBackendSearchProvider implements WebSearchProvider {
 
         const requestBody = {
           model,
+          // Search is a utility request, never an inherited account-level premium tier.
+          service_tier: 'default',
           store: false,
           stream: true,
           instructions: SEARCH_INSTRUCTIONS,

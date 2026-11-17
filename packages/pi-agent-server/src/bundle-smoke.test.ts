@@ -135,4 +135,17 @@ describe('pi-agent-server bundle', () => {
     expect(output).not.toContain('OFFLINE_FETCH_BLOCKED');
     expect(output).toContain('Failed to extract accountId from token');
   }, RUN_TIMEOUT_MS + 130_000);
+  it('rejects incompatible premium init as a visible protocol error before readiness/auth (offline)', async () => {
+    const output = await driveBundle([{ type: 'init', apiKey: '', model: 'pi/gpt-6.2-sol',
+      openAISpeed: 'ultrafast', baseUrl: 'https://example.invalid', customEndpoint: true,
+      cwd: scratchDir, workspaceRootPath: scratchDir, providerType: 'pi', authType: 'oauth',
+      piAuth: { provider: 'openai-codex', credential: { type: 'api_key', key: 'fake-not-a-jwt' } },
+    }], out => out.split('\n').some(line => { try { return JSON.parse(line).type === 'error'; } catch { return false; } }));
+    const messages = output.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+    expect(messages.some(msg => msg.type === 'error' && msg.message.includes('is not supported'))).toBe(true);
+    expect(messages.some(msg => msg.type === 'ready')).toBe(false);
+    expect(output).not.toContain('OFFLINE_FETCH_BLOCKED');
+    expect(output).not.toContain('Failed to extract accountId');
+  }, RUN_TIMEOUT_MS + 130_000);
+
 });

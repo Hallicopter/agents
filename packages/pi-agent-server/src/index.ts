@@ -114,6 +114,8 @@ import { adaptCredentialForPiSdk, type PiCredential } from './adapt-credential.t
 import { resolveCraftAgentDir } from './agent-dir.ts';
 import { toPiProviderId } from '../../shared/src/config/pi-provider-ids.ts';
 import { providerEndpointEnv } from './provider-endpoint-env.ts';
+import { assertOpenAISpeedAllowed, isOpenAISpeed, type OpenAISpeed } from '../../shared/src/agent/openai-speed.ts';
+import { wrapOpenAISpeedStream, configureOpenAISpeedBudget, type SpeedReport } from './openai-speed.ts';
 
 // ============================================================
 // Types — JSONL Protocol
@@ -126,6 +128,7 @@ interface InitMessage {
   model: string;
   cwd: string;
   thinkingLevel: string;
+  openAISpeed?: OpenAISpeed;
   workspaceRootPath: string;
   sessionId: string;
   sessionPath: string;
@@ -174,6 +177,7 @@ type InboundMessage =
   | { type: 'ensure_session_ready'; id: string }
   | { type: 'set_model'; model: string }
   | { type: 'set_thinking_level'; level: string }
+  | { type: 'set_openai_speed'; id: string; speed: OpenAISpeed }
   | { type: 'compact'; id: string; customInstructions?: string }
   | { type: 'set_auto_compaction'; id: string; enabled: boolean }
   | RuntimeConfigUpdateMessage
@@ -262,6 +266,8 @@ type OutboundMessage =
   | OutboundCompactResult
   | OutboundSetAutoCompactionResult
   | OutboundRuntimeConfigUpdateResult
+  | { type: 'openai_speed_report'; report: SpeedReport }
+  | { type: 'set_openai_speed_result'; id: string; success: boolean; updated: boolean; errorMessage?: string }
   | OutboundSessionIdUpdate
   | PiLargeResultGateRequest
   | OutboundError;
@@ -788,6 +794,11 @@ async function ensureSession(): Promise<AgentSession> {
 
   // Create the session — tools flow through customTools + allowlist (see comment above).
   const { session } = await createAgentSession(sessionOptions);
+  configureOpenAISpeedBudget(session, initConfig.openAISpeed ?? 'standard');
+  session.agent.streamFunction = wrapOpenAISpeedStream(session.agent.streamFunction, () => ({
+    speed: initConfig?.openAISpeed ?? 'standard', model: initConfig?.model, provider: nativeSpeedProvider(),
+    sessionId: session.sessionId,
+  }), report => send({ type: 'openai_speed_report', report }));
   if (requiresExactModel(initConfig.model)) {
     try {
       if (!sessionOptions.model) throw new Error('Exact Terra model was not resolved');
@@ -1103,6 +1114,11 @@ async function queryLlm(
     };
 
     const { session: ephemeralSession } = await createAgentSession(ephemeralOptions);
+    // Utility queries explicitly request Standard, never an account default or parent tier.
+    ephemeralSession.agent.streamFunction = wrapOpenAISpeedStream(ephemeralSession.agent.streamFunction,
+      () => ({ speed: 'standard', model: piModel.id,
+        provider: initConfig?.baseUrl || initConfig?.customEndpoint ? undefined : piModel.provider }),
+      report => debugLog(`[utility speed] ${report.message}`));
     const resource: EphemeralQueryResource = {
       abort: () => ephemeralSession.abort(),
       dispose: () => ephemeralSession.dispose(),
@@ -1436,6 +1452,8 @@ async function handleInit(msg: Extract<InboundMessage, { type: 'init' }>): Promi
   // Craft's stored provider ids → Pi SDK ids, once, so every consumer below
   // (credential store, model resolution, search) sees the SDK's id.
   initConfig = msg.piAuth ? { ...msg, piAuth: toPiAuth(msg.piAuth) } : msg;
+  if (initConfig.openAISpeed !== undefined && !isOpenAISpeed(initConfig.openAISpeed)) throw new Error('Invalid OpenAI speed');
+  assertOpenAISpeedAllowed(initConfig.openAISpeed ?? 'standard', initConfig.model, nativeSpeedProvider());
   applyProviderEndpointEnv(initConfig);
 
   // Start callback server for call_llm (idempotent — skips if already running)
@@ -1678,7 +1696,9 @@ async function handleCompact(msg: Extract<InboundMessage, { type: 'compact' }>):
 async function handleSetAutoCompaction(msg: Extract<InboundMessage, { type: 'set_auto_compaction' }>): Promise<void> {
   try {
     const session = await ensureSession();
-    session.setAutoCompactionEnabled(msg.enabled);
+    // Overflow/length recovery is separate from agent retries. Never re-enable
+    // implicit compact-and-retry calls while a premium tier is requested.
+    session.setAutoCompactionEnabled(msg.enabled && (initConfig?.openAISpeed ?? 'standard') === 'standard');
     send({
       type: 'set_auto_compaction_result',
       id: msg.id,
@@ -1787,6 +1807,25 @@ async function handleSetModel(msg: Extract<InboundMessage, { type: 'set_model' }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     debugLog(`[set_model] Failed to set model: ${errorMsg}`);
+  }
+}
+
+function nativeSpeedProvider(): string | undefined {
+  return initConfig?.providerType === 'pi' && !initConfig.customEndpoint && !initConfig.baseUrl
+    ? initConfig.piAuth?.provider : undefined;
+}
+
+async function handleSetOpenAISpeed(msg: Extract<InboundMessage, { type: 'set_openai_speed' }>): Promise<void> {
+  try {
+    if (!initConfig) throw new Error('Pi runtime not initialized');
+    if (!isOpenAISpeed(msg.speed)) throw new Error('Invalid OpenAI speed');
+    if (piSession?.isStreaming || piSession?.isCompacting) throw new Error('Cannot change speed while the session is busy');
+    assertOpenAISpeedAllowed(msg.speed, initConfig.model, nativeSpeedProvider());
+    if (piSession) configureOpenAISpeedBudget(piSession, msg.speed);
+    initConfig.openAISpeed = msg.speed;
+    send({ type: 'set_openai_speed_result', id: msg.id, success: true, updated: true });
+  } catch (error) {
+    send({ type: 'set_openai_speed_result', id: msg.id, success: false, updated: false, errorMessage: String(error) });
   }
 }
 
@@ -1900,6 +1939,10 @@ async function processMessage(msg: InboundMessage): Promise<void> {
 
     case 'set_model':
       await handleSetModel(msg);
+      break;
+
+    case 'set_openai_speed':
+      await handleSetOpenAISpeed(msg);
       break;
 
     case 'set_thinking_level':

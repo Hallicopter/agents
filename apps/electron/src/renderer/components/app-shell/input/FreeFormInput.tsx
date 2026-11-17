@@ -77,6 +77,7 @@ import { ComposerCodingChip } from './ComposerCodingChip'
 import { useDirectoryPicker } from '@/hooks/useDirectoryPicker'
 import { ServerDirectoryBrowser } from '@/components/ServerDirectoryBrowser'
 import { ComposerModelMenu } from './ComposerModelMenu'
+import { OpenAISpeedSelector, type OpenAISpeedProps } from './OpenAISpeedSelector'
 import { ComposerModeChip } from './ComposerModeChip'
 import { ContextUsageChip } from './ContextUsageChip'
 import { FollowUpChips } from './FollowUpChips'
@@ -108,7 +109,7 @@ export interface FollowUpInputItem {
   color?: string
 }
 
-export interface FreeFormInputProps {
+export interface FreeFormInputProps extends OpenAISpeedProps {
   /** A console snippet was pasted (`$ cmd` lines or a fenced shell block): offer to run it in the background */
   onConsoleSnippetPaste?: (snippet: { command: string; text: string }) => void
   /** Placeholder text(s) for the textarea - can be array for rotation */
@@ -261,6 +262,8 @@ export function FreeFormInput({
   inputRef: externalInputRef,
   currentModel,
   onModelChange,
+  openAISpeed,
+  onOpenAISpeedChange,
   thinkingLevel = 'medium',
   onThinkingLevelChange,
   permissionMode = 'ask',
@@ -1905,6 +1908,18 @@ export function FreeFormInput({
             />
           )}
 
+          {/* One control for both layouts and both clients. Never use a display/account name
+              as provider evidence, or offer native tiers on compatible-provider connections. */}
+          {(!compactMode || enableCompactModelPicker) && (
+            <OpenAISpeedSelector
+              key={`${sessionId}:${currentModel}:${effectiveConnection}`}
+              model={currentModel}
+              provider={effectiveConnectionDetails?.providerType === 'pi' ? effectiveConnectionDetails.piAuthProvider : undefined}
+              openAISpeed={openAISpeed}
+              onOpenAISpeedChange={onOpenAISpeedChange}
+              disabled={disabled || isProcessing || connectionUnavailable}
+            />
+          )}
           </div>
 
           {/* Context usage meter. Percent text is truthful and may exceed 100%; action requires explicit canCompact. */}

@@ -126,6 +126,7 @@ import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntr
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 import { validateArchiveTarget } from './archive-guards'
 import { spawnedSessionOptions } from './spawn-options'
+import { assertOpenAISpeedAllowed, isOpenAISpeed, type OpenAISpeed } from '@craft-agent/shared/agent/openai-speed'
 import { addTurnUsage, branchStartTotals, type BranchParent } from './turn-usage'
 
 // Import from server-core domain utilities
@@ -836,6 +837,12 @@ interface ManagedSession {
   connectionLocked?: boolean
   // Thinking level for this session ('off', 'think', 'max')
   thinkingLevel?: ThinkingLevel
+  // Requested tier only: preserve on model/provider changes; guard use rather than downgrade.
+  openAISpeed?: OpenAISpeed
+  // Serialize asynchronous speed changes with backend use; never persisted.
+  openAISpeedUpdate?: Promise<void>
+  // Failed runtime/disk rollback: block sends until an explicit successful tier selection.
+  openAISpeedError?: string
   // Coding mode: lean coding prompt + session-tool profile (fixed once the session has messages)
   codingMode?: boolean
   // Coding mode: PRs pinned to this session (chat-header PR carousel; see pr_bind / pr_unbind)
@@ -4092,6 +4099,9 @@ export class SessionManager implements ISessionManager {
    * 4. fallback: no connection configured
    */
   private async getOrCreateAgent(managed: ManagedSession): Promise<AgentInstance> {
+    // A send may arrive while the async runtime tier acknowledgement is pending.
+    await managed.openAISpeedUpdate
+    if (managed.openAISpeedError) throw new Error(managed.openAISpeedError)
     // Refresh runtime config in-place when the connection has drifted since
     // the agent was created. May null out `managed.agent` if the in-place
     // refresh fails, in which case the create branch below rebuilds it.
@@ -4104,6 +4114,9 @@ export class SessionManager implements ISessionManager {
       managedModel: managed.model,
     })
     const connection = backendContext.connection
+    // Keep the requested tier across model/provider changes. Never silently send Standard.
+    assertOpenAISpeedAllowed(managed.openAISpeed ?? 'standard', backendContext.resolvedModel,
+      connection?.providerType === 'pi' ? connection.piAuthProvider : undefined)
     const sigInput = {
       connection,
       provider: backendContext.provider,
@@ -4205,6 +4218,7 @@ export class SessionManager implements ISessionManager {
         sdkCwd: managed.sdkCwd,
         model: managed.model,
         llmConnection: managed.llmConnection,
+        openAISpeed: managed.openAISpeed,
         permissionMode: managed.permissionMode,
         previousPermissionMode: managed.previousPermissionMode,
         projectId: managed.projectId,
@@ -4316,6 +4330,7 @@ export class SessionManager implements ISessionManager {
         workspace: managed.workspace,
         miniModel,
         thinkingLevel: managed.thinkingLevel,
+        openAISpeed: managed.openAISpeed,
         session: sessionConfig,
         onSdkSessionIdUpdate,
         onSdkSessionIdCleared,
@@ -8681,6 +8696,86 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
+   * Explicit per-session requested tier, never an entitlement or applied-tier claim.
+   * Premium requests require fresh UI acknowledgement and are never inherited.
+   */
+  async setSessionOpenAISpeed(sessionId: string, speed: OpenAISpeed, acknowledged?: boolean): Promise<void> {
+    if (!isOpenAISpeed(speed)) throw new Error(`Invalid OpenAI speed: ${String(speed)}`)
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (managed.isProcessing || managed.agent?.isProcessing() || managed.openAISpeedUpdate) {
+      throw new Error('Cannot change OpenAI speed while the session is processing or a speed update is pending')
+    }
+    if (speed !== 'standard' && acknowledged !== true) {
+      throw new Error('Premium OpenAI speed requires explicit consumption/cost acknowledgement')
+    }
+    const workspaceConfig = loadWorkspaceConfig(managed.workspace.rootPath)
+    const context = resolveBackendContext({
+      sessionConnectionSlug: managed.llmConnection,
+      workspaceDefaultConnectionSlug: workspaceConfig?.defaults?.defaultLlmConnection,
+      managedModel: managed.model,
+    })
+    assertOpenAISpeedAllowed(speed, context.resolvedModel,
+      context.connection?.providerType === 'pi' ? context.connection.piAuthProvider : undefined)
+
+    const update = async () => {
+      const previousSpeed = managed.openAISpeed
+      if (managed.agent?.setOpenAISpeed) {
+        // The backend must acknowledge success before metadata/UI claims the request changed.
+        await managed.agent.setOpenAISpeed(speed)
+      } else if (managed.agent) {
+        // Optional hook: recreate the idle runtime with the new config on its next use.
+        await this.disposeManagedAgentRuntime(managed, 'OpenAI speed change')
+      }
+      const persistSpeed = async () => {
+        this.setMetadataWriteGuard(managed)
+        this.persistSession(managed)
+        await this.flushSession(sessionId)
+        // The general debounced queue logs IO errors instead of throwing. A premium
+        // command must not report success without a matching durable header.
+        const header = readSessionHeader(getSessionFilePath(managed.workspace.rootPath, sessionId))
+        if (!header || header.openAISpeed !== managed.openAISpeed) {
+          throw new Error('Failed to persist requested OpenAI speed')
+        }
+      }
+      managed.openAISpeed = speed
+      try {
+        await persistSpeed()
+      } catch (error) {
+        managed.openAISpeed = previousSpeed
+        sessionPersistenceQueue.cancel(sessionId) // Never leave a queued premium snapshot behind.
+        let rollbackFailed = false
+        try {
+          await managed.agent?.setOpenAISpeed?.(previousSpeed ?? 'standard')
+        } catch (rollbackError) {
+          rollbackFailed = true
+          sessionLog.warn(`OpenAI speed runtime rollback failed for ${sessionId}: ${String(rollbackError)}`)
+        }
+        try {
+          await persistSpeed()
+        } catch (rollbackError) {
+          rollbackFailed = true
+          sessionLog.warn(`OpenAI speed persistence rollback failed for ${sessionId}: ${String(rollbackError)}`)
+        }
+        if (rollbackFailed) {
+          managed.openAISpeedError = 'OpenAI speed could not be safely saved or restored. Explicitly select a speed again before sending; no automatic fallback was performed.'
+        }
+        throw error
+      }
+      managed.openAISpeedError = undefined
+      this.sendEvent({ type: 'session_metadata_changed', sessionId, changes: { openAISpeed: speed } }, managed.workspace.id)
+    }
+    // Defer execution until the promise is registered, even when there is no live backend.
+    const pending = Promise.resolve().then(update)
+    managed.openAISpeedUpdate = pending
+    try {
+      await pending
+    } finally {
+      if (managed.openAISpeedUpdate === pending) managed.openAISpeedUpdate = undefined
+    }
+  }
+
+  /**
    * Turn coding mode on or off: the lean coding system prompt and session-tool profile.
    * Only before the conversation starts (see {@link hasConversationStarted}); after that the UI
    * offers to continue in a new session instead, so this throws.
@@ -10411,6 +10506,8 @@ export class SessionManager implements ISessionManager {
       llmConnection: header.llmConnection,
       connectionLocked: header.connectionLocked,
       thinkingLevel: header.thinkingLevel,
+      // Moving the same session preserves its request; a fork is a new Standard session.
+      openAISpeed: mode === 'move' ? header.openAISpeed : undefined,
       // Keeps the SDK session (and its pinned prompt/tool profile) when not forked, so the mode travels with it
       codingMode: header.codingMode,
       hidden: header.hidden,

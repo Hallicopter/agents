@@ -151,6 +151,7 @@ interface ChatDisplayProps {
   // Model selection
   currentModel: string
   onModelChange: (model: string, connection?: string) => void
+  onOpenAISpeedChange?: import('./input/OpenAISpeedSelector').OpenAISpeedProps['onOpenAISpeedChange']
   // Connection selection (locked after first message)
   /** Callback when LLM connection changes (only works when session is empty) */
   onConnectionChange?: (connectionSlug: string) => void
@@ -294,6 +295,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   onOpenUrl,
   currentModel,
   onModelChange,
+  onOpenAISpeedChange,
   onConnectionChange,
   textareaRef: externalTextareaRef,
   disabled = false,
@@ -1821,6 +1823,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               textareaRef,
               currentModel,
               onModelChange,
+              openAISpeed: session.openAISpeed,
+              onOpenAISpeedChange,
               thinkingLevel,
               onThinkingLevelChange,
               codingMode,

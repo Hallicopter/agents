@@ -17,6 +17,8 @@ import type {
 } from '@craft-agent/core/types'
 import type { PermissionMode } from '../agent/mode-types'
 import type { ThinkingLevel } from '../agent/thinking-levels'
+import type { OpenAISpeed } from '../agent/openai-speed'
+export type { OpenAISpeed } from '../agent/openai-speed'
 import type { BoundPr, PrMonitorState } from './pr-watch'
 import type { CustomEndpointConfig } from '../config/llm-connections'
 import type {
@@ -75,6 +77,8 @@ export interface Session {
   sharedId?: string
   model?: string
   llmConnection?: string
+  /** Requested tier, not provider-verified application. Absent means Standard. */
+  openAISpeed?: OpenAISpeed
   thinkingLevel?: ThinkingLevel
   /** Coding mode: lean coding prompt + session-tool profile (fixed once the session has messages) */
   codingMode?: boolean
@@ -480,7 +484,7 @@ export type SessionEvent =
   | { type: 'name_changed'; sessionId: string; name?: string }
   | { type: 'session_model_changed'; sessionId: string; model: string | null }
   | { type: 'session_status_changed'; sessionId: string; sessionStatus: SessionStatus }
-  | { type: 'session_metadata_changed'; sessionId: string; changes: Partial<Pick<Session, 'taskNodeCount' | 'kanbanColumn' | 'taskDraft' | 'taskSlug' | 'projectId'>> }
+  | { type: 'session_metadata_changed'; sessionId: string; changes: Partial<Pick<Session, 'taskNodeCount' | 'kanbanColumn' | 'taskDraft' | 'taskSlug' | 'projectId' | 'openAISpeed'>> }
   | { type: 'session_deleted'; sessionId: string }
   | { type: 'session_created'; sessionId: string }
   | { type: 'session_shared'; sessionId: string; sharedUrl: string }
@@ -527,6 +531,7 @@ export type SessionCommand =
   | { type: 'setActiveViewing'; workspaceId: string }
   | { type: 'setPermissionMode'; mode: PermissionMode }
   | { type: 'setThinkingLevel'; level: ThinkingLevel }
+  | { type: 'setOpenAISpeed'; speed: OpenAISpeed; acknowledged?: boolean }
   | { type: 'setCodingMode'; enabled: boolean }
   /** Coding mode is fixed once a session has messages: continue in a new session with it switched. Returns `{ sessionId }`. */
   | { type: 'continueInNewSession'; codingMode: boolean }

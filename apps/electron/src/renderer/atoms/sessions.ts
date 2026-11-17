@@ -59,6 +59,8 @@ export interface SessionMeta {
   model?: string
   /** LLM connection slug for this session */
   llmConnection?: string
+  /** Explicit per-session requested tier; undefined means Standard, not provider-verified. */
+  openAISpeed?: Session['openAISpeed']
   /** Token usage stats (from JSONL header, available without loading messages) */
   tokenUsage?: {
     inputTokens: number

@@ -17,6 +17,8 @@ import { useAppShellContext, usePendingPermission, usePendingCredential, useSess
 import { rendererPerf } from '@/lib/perf'
 import { isAbsolutePath } from '@/lib/drafts'
 import { coerceInputText } from '@/lib/input-text'
+import { requestSessionOpenAISpeed } from '@/lib/openai-speed-command'
+import type { OpenAISpeed } from '@craft-agent/shared/agent/openai-speed'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
 import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
@@ -273,6 +275,16 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     }
   }, [sessionId, activeWorkspaceId])
 
+  // Explicit session-only request. Await persistence; the canonical metadata event updates UI.
+  const handleOpenAISpeedChange = React.useCallback(async (speed: OpenAISpeed, acknowledged?: true) => {
+    await requestSessionOpenAISpeed(
+      (id, command) => window.electronAPI.sessionCommand(id, command),
+      sessionId,
+      speed,
+      acknowledged,
+    )
+  }, [sessionId])
+
   // Session connection change handler - can only change before first message
   const handleConnectionChange = React.useCallback(async (connectionSlug: string) => {
     try {
@@ -526,6 +538,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           onOpenUrl={handleOpenUrl}
           currentModel={effectiveModel}
           onModelChange={handleModelChange}
+          onOpenAISpeedChange={handleOpenAISpeedChange}
           onConnectionChange={handleConnectionChange}
           pendingPermission={pendingPermission}
           onRespondToPermission={onRespondToPermission}

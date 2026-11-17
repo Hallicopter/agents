@@ -11,6 +11,7 @@
 
 import type { PermissionMode } from '../agent/mode-manager.ts';
 import type { ThinkingLevel } from '../agent/thinking-levels.ts';
+import type { OpenAISpeed } from '../agent/openai-speed.ts';
 import type { BoundPr, PrMonitorState } from '../protocol/pr-watch.ts';
 import type { StoredAttachment, MessageRole, ToolStatus, AuthRequestType, AuthStatus, CredentialInputMode, StoredMessage, ContextUsageSnapshot } from '@craft-agent/core/types';
 
@@ -36,7 +37,7 @@ export const SESSION_PERSISTENT_FIELDS = [
   // Config
   'enabledSourceSlugs', 'permissionMode', 'previousPermissionMode', 'workingDirectory',
   // Model/Connection
-  'model', 'llmConnection', 'connectionLocked', 'thinkingLevel',
+  'model', 'llmConnection', 'connectionLocked', 'thinkingLevel', 'openAISpeed',
   // Coding mode (lean coding prompt + tool profile; fixed once the session has messages)
   'codingMode',
   // Coding mode: PRs pinned to this session (chat-header PR carousel; see protocol/pr-watch BoundPr)
@@ -168,6 +169,8 @@ export interface SessionConfig {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Explicit requested speed for this session only. Absent means Standard; never inherit into new sessions. */
+  openAISpeed?: OpenAISpeed;
   /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
   codingMode?: boolean;
   /** Coding mode: PRs pinned to this session, shown in the chat-header PR carousel (pr_bind / pr_unbind). */
@@ -316,6 +319,8 @@ export interface SessionHeader {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Explicit requested speed for this session only. Absent means Standard; never inherit into new sessions. */
+  openAISpeed?: OpenAISpeed;
   /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
   codingMode?: boolean;
   /** Coding mode: PRs pinned to this session, shown in the chat-header PR carousel (pr_bind / pr_unbind). */
@@ -435,6 +440,8 @@ export interface SessionMetadata {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Explicit requested speed for this session only. Absent means Standard; never inherit into new sessions. */
+  openAISpeed?: OpenAISpeed;
   /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
   codingMode?: boolean;
   /** Coding mode: PRs pinned to this session, shown in the chat-header PR carousel (pr_bind / pr_unbind). */

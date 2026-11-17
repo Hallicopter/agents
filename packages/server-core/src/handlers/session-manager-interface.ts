@@ -10,6 +10,7 @@ import type { Workspace, WorkspaceInfo, ActiveSessionInfo } from '@craft-agent/c
 import type { StoredAttachment, AnnotationV1 } from '@craft-agent/core/types'
 import type { PermissionMode } from '@craft-agent/shared/agent/mode-types'
 import type { ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
+import type { OpenAISpeed } from '@craft-agent/shared/agent/openai-speed'
 import type { AuthResult } from '@craft-agent/shared/agent'
 import type {
   Session,
@@ -90,6 +91,7 @@ export interface ISessionManager {
 
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
+  setSessionOpenAISpeed(sessionId: string, speed: OpenAISpeed, acknowledged?: boolean): Promise<void>
   setSessionCodingMode(sessionId: string, enabled: boolean): void
   continueSessionInNewSession(sessionId: string, codingMode: boolean): Promise<{ sessionId: string }>
   /** Coding mode: PRs pinned to a session (chat-header PR carousel, in addedAt order). */

@@ -34,6 +34,7 @@ import type { ThinkingLevel } from './thinking-levels.ts';
 
 // Import models from centralized registry
 import { getModelById } from '../config/models.ts';
+import { assertOpenAISpeedAllowed, type OpenAISpeed } from './openai-speed.ts';
 
 // BaseAgent provides common functionality
 import { BaseAgent } from './base-agent.ts';
@@ -179,6 +180,7 @@ export class PiAgent extends BaseAgent {
   private readline: ReadlineInterface | null = null;
   private subprocessReady: Promise<void> | null = null;
   private subprocessReadyResolve: (() => void) | null = null;
+  private subprocessReadyReject: ((error: Error) => void) | null = null;
 
   // Pi session ID (managed by subprocess, reported back)
   private piSessionId: string | null = null;
@@ -338,6 +340,9 @@ export class PiAgent extends BaseAgent {
   }> = new Map();
 
   // Pending runtime config updates (custom endpoint model capability refresh)
+  private openAISpeedUpdateUncertain = false;
+  private openAISpeedTimeoutMs = 15_000;
+
   private pendingRuntimeConfigUpdates: Map<string, {
     resolve: (updated: boolean) => void;
     reject: (error: Error) => void;
@@ -458,6 +463,8 @@ export class PiAgent extends BaseAgent {
    */
   private async spawnSubprocess(): Promise<void> {
     const runtime = getBackendRuntime(this.config);
+    assertOpenAISpeedAllowed(this.config.openAISpeed ?? 'standard', this._model,
+      this.config.providerType === 'pi' && !runtime.baseUrl && !runtime.customEndpoint ? runtime.piAuthProvider : undefined);
     const piServerPath = runtime.paths?.piServer;
     if (!piServerPath) {
       throw new Error('piServerPath not configured. Cannot spawn Pi subprocess.');
@@ -470,9 +477,12 @@ export class PiAgent extends BaseAgent {
     this.resetSubprocessErrorDedup();
 
     // Set up ready promise before spawning
-    this.subprocessReady = new Promise<void>((resolve) => {
+    this.subprocessReady = new Promise<void>((resolve, reject) => {
       this.subprocessReadyResolve = resolve;
+      this.subprocessReadyReject = reject;
     });
+    // A spawn error can arrive before the later await; keep the rejection observed.
+    void this.subprocessReady.catch(() => {});
 
     // Build session ID and session dir path upfront (used for spawn env + init command)
     const sessionId = this.config.session?.id || `agent-${Date.now()}`;
@@ -576,6 +586,7 @@ export class PiAgent extends BaseAgent {
       model: this._model,
       cwd,
       thinkingLevel: this._thinkingLevel,
+      openAISpeed: this.config.openAISpeed ?? 'standard',
       workspaceRootPath: this.config.workspace.rootPath,
       sessionId,
       sessionPath,
@@ -603,7 +614,7 @@ export class PiAgent extends BaseAgent {
     // Ensure auto-compaction is explicitly enabled for embedded sessions.
     // PI defaults this to enabled, but we set it proactively for clarity and resilience.
     try {
-      const enabled = await this.requestSetAutoCompaction(true);
+      const enabled = await this.requestSetAutoCompaction((this.config.openAISpeed ?? 'standard') === 'standard');
       this.debug(`PI auto-compaction enabled: ${enabled}`);
     } catch (error) {
       this.debug(`Failed to configure PI auto-compaction (continuing): ${error instanceof Error ? error.message : String(error)}`);
@@ -931,6 +942,9 @@ export class PiAgent extends BaseAgent {
     if (this.subprocess !== child || this.failedSubprocesses.has(child)) return;
     this.failedSubprocesses.add(child);
     this.debug(`Subprocess error: ${error.message}`);
+    this.subprocessReadyReject?.(error);
+    this.subprocessReadyReject = null;
+    this.subprocessReadyResolve = null;
     this.resetSubprocessErrorDedup();
     this.eventQueue.enqueue({ type: 'error', message: `Pi subprocess error: ${error.message}` });
     this.eventQueue.complete();
@@ -976,6 +990,8 @@ export class PiAgent extends BaseAgent {
           this.config.onSdkSessionIdUpdate?.(this.piSessionId!);
         }
         this.subprocessReadyResolve?.();
+        this.subprocessReadyResolve = null;
+        this.subprocessReadyReject = null;
         break;
 
       case 'event':
@@ -1049,6 +1065,13 @@ export class PiAgent extends BaseAgent {
         this.handleSetAutoCompactionResult(msg);
         break;
 
+      case 'openai_speed_report': {
+        const report = msg.report as { message?: string };
+        if (typeof report?.message === 'string') this.eventQueue.enqueue({ type: 'info', message: report.message });
+        break;
+      }
+
+      case 'set_openai_speed_result':
       case 'update_runtime_config_result':
         // Response to a runtime config refresh request
         this.handleRuntimeConfigUpdateResult(msg);
@@ -1065,6 +1088,9 @@ export class PiAgent extends BaseAgent {
       case 'error': {
         const errorCode = typeof msg.code === 'string' ? msg.code : undefined;
         const rawMessage = String(msg.message || 'Unknown subprocess error');
+        this.subprocessReadyReject?.(new Error(rawMessage));
+        this.subprocessReadyReject = null;
+        this.subprocessReadyResolve = null;
 
         this.debug(`Subprocess error${errorCode ? ` (${errorCode})` : ''}: ${rawMessage}`);
         const errorMsg = rawMessage.toLowerCase();
@@ -1842,8 +1868,10 @@ export class PiAgent extends BaseAgent {
     this.subprocess = null;
     this.readline = null;
     this.resetSubprocessErrorDedup();
+    this.subprocessReadyReject?.(new Error('Pi subprocess stopped before ready'));
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
+    this.subprocessReadyReject = null;
 
     // If we were processing, emit error + complete
     if (this._isProcessing) {
@@ -2068,6 +2096,11 @@ export class PiAgent extends BaseAgent {
     attachments?: FileAttachment[],
     options?: ChatOptions
   ): AsyncGenerator<AgentEvent> {
+    if (this.openAISpeedUpdateUncertain) {
+      yield { type: 'error', message: 'OpenAI speed update was not acknowledged. Explicitly reselect Standard or the desired tier before sending; no request was made.' };
+      yield { type: 'complete' };
+      return;
+    }
     let message = messageParam;
     const compactMatch = message.trim().match(/^\/compact(?:\s+([\s\S]+))?$/i);
     const compactEpoch = this.compactionEpoch;
@@ -2391,6 +2424,32 @@ export class PiAgent extends BaseAgent {
     return updated;
   }
 
+  async setOpenAISpeed(speed: OpenAISpeed): Promise<void> {
+    const runtime = getBackendRuntime(this.config);
+    const provider = this.config.providerType === 'pi' && !runtime.customEndpoint && !runtime.baseUrl
+      ? runtime.piAuthProvider : undefined;
+    assertOpenAISpeedAllowed(speed, this._model, provider);
+    if (this._isProcessing) throw new Error('Cannot change OpenAI speed while processing');
+    if (this.subprocess) {
+      this.openAISpeedUpdateUncertain = true;
+      const id = `openai-speed-${++this.rpcIdCounter}`;
+      const updated = await new Promise<boolean>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pendingRuntimeConfigUpdates.delete(id);
+          reject(new Error('set_openai_speed timed out; selection was not persisted'));
+        }, this.openAISpeedTimeoutMs);
+        this.pendingRuntimeConfigUpdates.set(id, {
+          resolve: updated => { clearTimeout(timer); resolve(updated); },
+          reject: error => { clearTimeout(timer); reject(error); },
+        });
+        this.send({ type: 'set_openai_speed', id, speed });
+      });
+      if (!updated) throw new Error('OpenAI speed update was not applied; explicitly reselect a tier');
+    }
+    this.config.openAISpeed = speed;
+    this.openAISpeedUpdateUncertain = false;
+  }
+
   override setModel(model: string): void {
     const previousModel = this.getModel();
     super.setModel(model);
@@ -2646,8 +2705,10 @@ export class PiAgent extends BaseAgent {
     if (this.subprocess === child) {
       this.subprocess = null;
     }
+    this.subprocessReadyReject?.(new Error('Pi subprocess stopped before ready'));
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
+    this.subprocessReadyReject = null;
     this.callbackPort = 0;
     this.preToolMetadataByCallId.clear();
     this.adapter.resetRecoveryState();
@@ -2690,8 +2751,10 @@ export class PiAgent extends BaseAgent {
       this.subprocess = null;
     }
 
+    this.subprocessReadyReject?.(new Error('Pi subprocess stopped before ready'));
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
+    this.subprocessReadyReject = null;
     this.callbackPort = 0;
     this.preToolMetadataByCallId.clear();
 
