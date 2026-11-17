@@ -2,8 +2,8 @@ import {deserializeEnvelope} from '../../transport/codec'
 import type { HistoryCursor, SessionHistoryWindow } from '@craft-agent/shared/protocol'
 import type { ElectronAPI } from '../../shared/types'
 
-export async function readWindow(api:Pick<ElectronAPI,'getSessionHistoryWindow'>, id:string, cursor?:HistoryCursor):Promise<SessionHistoryWindow> {
-  let page = await api.getSessionHistoryWindow(id,cursor)
+export async function readWindow(api:Pick<ElectronAPI,'getSessionHistoryWindow'>, id:string, cursor?:HistoryCursor, submissionIds?:string[]):Promise<SessionHistoryWindow> {
+  let page = await api.getSessionHistoryWindow(id,cursor,undefined,submissionIds)
   if (!('token' in page)) return page
   const token = page.token, parts:string[] = []
   let offset = 0

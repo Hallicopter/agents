@@ -2750,9 +2750,12 @@ export class SessionManager implements ISessionManager {
 
   private readonly historyRevisions = new WeakMap<ManagedSession, string>()
 
+  // Process-local tombstones: after manager replacement missing proof means unknown, never retry.
+  private readonly cancelledSubmissions = new WeakMap<ManagedSession, Set<string>>()
+
   private newSubmissionId(m: ManagedSession, proposed?: string): string {
     if (!proposed) return generateMessageId()
-    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(proposed) || m.messages.some(x => x.id === proposed)) throw Error('Invalid or repeated submission ID')
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(proposed) || this.cancelledSubmissions.get(m)?.has(proposed) || m.messages.some(x => x.id === proposed)) throw Error('Invalid or repeated submission ID')
     return proposed
   }
 
@@ -2760,10 +2763,13 @@ export class SessionManager implements ISessionManager {
 
   // Called synchronously after hydration: metadata, messages, dispatched stream and
   // sequence must be sampled in the same JS turn (not across another await).
-  captureHistory(id: string) {
+  captureHistory(id: string, submissionIds?: string[]) {
     const m = this.sessions.get(id)
     if (!m?.messagesLoaded) return null
-    return {pendingPermissions: [...this.pendingPermissionRequests.values()].flatMap(p=>p.sessionId===id && p.prompt ? [p.prompt] : []), session: managedToSession(m, {messages:m.messages}), watermark:this.historySequences.get(m) ?? 0}
+    const requested = new Set(submissionIds)
+    const settledIds = submissionIds?.filter(id => this.cancelledSubmissions.get(m)?.has(id)) ?? []
+    const acceptedIds = requested.size ? m.messages.filter(msg => msg.role === 'user' && requested.has(msg.id)).map(msg => msg.id) : []
+    return {submissionState: requested.size ? {cancelled: settledIds, accepted: acceptedIds} : undefined, pendingPermissions: [...this.pendingPermissionRequests.values()].flatMap(p=>p.sessionId===id && p.prompt ? [p.prompt] : []), session: managedToSession(m, {messages:m.messages}), watermark:this.historySequences.get(m) ?? 0}
   }
 
   getHistoryRevision(sessionId: string): string | null {
@@ -7458,6 +7464,9 @@ export class SessionManager implements ISessionManager {
 
     // Remove queued user messages from the persisted messages array
     if (queuedMessageIds.size > 0) {
+      const cancelled = this.cancelledSubmissions.get(managed) ?? new Set<string>()
+      for (const id of queuedMessageIds) cancelled.add(id)
+      this.cancelledSubmissions.set(managed, cancelled)
       managed.messages = managed.messages.filter(m => !queuedMessageIds.has(m.id))
     }
 

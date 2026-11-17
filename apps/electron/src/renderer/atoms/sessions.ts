@@ -1,5 +1,5 @@
 import {readWindow} from './history-transfer'
-import {beginHistory,endHistory,forgetHistory,rebaseHistory} from './history-replay'
+import {beginHistory,endHistory,forgetHistory,rebaseHistory,unknownDeliveries,quarantinePending} from './history-replay'
 /**
  * Per-Session State Management with Jotai
  *
@@ -652,7 +652,7 @@ async function loadSessionMessages(
     const api = window.electronAPI
     let page: import('@craft-agent/shared/protocol').SessionHistoryWindow | undefined
     if (typeof api.getSessionHistoryWindow === 'function' && api.isChannelAvailable?.('sessions:historyWindow')) {
-      try { page = await readWindow(api,sessionId) }
+      try { page = await readWindow(api,sessionId,undefined,[...new Set([...unknownDeliveries(workspace ?? "",sessionId), ...(beforeLoad?.messages.filter(m=>m.role==='user' && m.isPending) ?? [])].map(m=>m.id))].slice(0,256)) }
       catch (error) {
         // Old servers without a channel list optimistically report availability.
         if ((error as {code?:string}).code !== 'CHANNEL_NOT_FOUND') throw error
@@ -720,6 +720,15 @@ async function loadSessionMessages(
           sessionFolderPath: loadedSession.sessionFolderPath ?? existingSession.sessionFolderPath,
         }
       : loadedSession
+    if (!page && existingSession) {
+      // Legacy snapshots have no cancel tombstones. Keep uncertainty off-transcript;
+      // do not preserve stale queued bubbles through either legacy stream guard.
+      quarantinePending(loadedSession,existingSession,events)
+      const canonical = new Set(loadedSession.messages.map(m=>m.id))
+      if (mergedSession.messages.some(m=>m.role==='user' && (m.isPending || m.isQueued) && !canonical.has(m.id))) {
+        mergedSession.messages=mergedSession.messages.filter(m=>m.role!=='user' || !(m.isPending || m.isQueued) || canonical.has(m.id))
+      }
+    }
     if (existingSession?.inventoryPartial || !get(sessionMetaMapAtom).has(sessionId)) set(refreshSessionsMetadataAtom, { sessions: [mergedSession], loadedSessionIds: get(loadedSessionsAtom), removeMissing: false })
     else set(sessionAtomFamily(sessionId), mergedSession)
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from '@/hooks/useTheme'
-import {observeHistory} from './atoms/history-replay'
+import {observeHistory,reconcileDelivery,claimHistoryEffect} from './atoms/history-replay'
 import { useSetAtom, useStore, useAtomValue, useAtom } from 'jotai'
 import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, SetupNeeds, SessionStatus, NewChatActionParams, ContentBadge, LlmConnectionWithStatus, PermissionModeState } from '../shared/types'
 import type { SessionDraft, DraftAttachmentRef } from '@craft-agent/shared/config'
@@ -874,12 +874,50 @@ function MainApp() {
       }
     }
 
+    const notifyCompletion = (updatedSession: Session, sessionId:string) => {
+            // Get the last assistant/plan message as preview
+            const lastMessage = updatedSession.messages.findLast(
+              m => (m.role === 'assistant' || m.role === 'plan') && !m.isIntermediate
+            )
+            // Strip markdown so OS notifications display clean plain text
+            const rawPreview = lastMessage?.content?.substring(0, 200) || undefined
+            const preview = rawPreview ? stripMarkdown(rawPreview).substring(0, 100) || undefined : undefined
+            showSessionNotification(updatedSession, preview)
+
+            // In-app complement to the OS notification: when a *background*
+            // session (one not shown in any open panel) finishes, queue a chip
+            // above the chat. The OS notification above is suppressed while the
+            // window is focused, so the chip is the only completion signal then.
+            if (
+              store.get(showBackgroundFinishedChipAtom) &&
+              !store.get(visibleSessionIdsAtom).has(sessionId)
+            ) {
+              store.set(pushBackgroundFinishedAtom, {
+                sessionId,
+                title: getSessionTitle(updatedSession),
+                finishedAt: Date.now(),
+              })
+            }
+    }
+
     const cleanup = window.electronAPI.onSessionEvent((event: SessionEvent) => {
       if (!('sessionId' in event)) return
 
       const sessionId = event.sessionId
-      if (!observeHistory(sessionId,event)) return
       const workspaceId = windowWorkspaceId ?? ''
+      reconcileDelivery(workspaceId,sessionId,event)
+      const deliverEffect = claimHistoryEffect(workspaceId,event)
+      if (!observeHistory(sessionId,event)) {
+        // The snapshot covers transcript state, not one-shot UI effects. Never
+        // run a stale reducer or clear a newer turn's approvals on this path.
+        const snapshot = store.get(sessionAtomFamily(sessionId))
+        if (!snapshot || snapshot.workspaceId !== workspaceId || !deliverEffect) return
+        if (event.type==='interrupted' && event.message && event.queuedMessages?.length) {
+          handleEffects([{type:'restore_input',text:event.queuedMessages.join('\n\n')}],sessionId,event.type)
+        }
+        if (event.type==='complete' && !snapshot.hidden) notifyCompletion(snapshot,sessionId)
+        return
+      }
 
       // Session lifecycle events are handled explicitly (not by the agent event processor).
       if (event.type === 'session_created') {
@@ -946,7 +984,7 @@ function MainApp() {
         updateSessionDirect(sessionId, () => updatedSession)
 
         // Handle side effects
-        handleEffects(effects, sessionId, event.type)
+        handleEffects(deliverEffect ? effects : effects.filter(e=>e.type!=='restore_input'), sessionId, event.type)
 
         // Handle background task events
         handleBackgroundTaskEvent(store, sessionId, event, agentEvent)
@@ -956,29 +994,7 @@ function MainApp() {
           // Show notification on complete (when window is not focused)
           // Skip hidden sessions (mini-agent sessions) - they shouldn't trigger notifications
           if (event.type === 'complete' && !updatedSession.hidden) {
-            // Get the last assistant/plan message as preview
-            const lastMessage = updatedSession.messages.findLast(
-              m => (m.role === 'assistant' || m.role === 'plan') && !m.isIntermediate
-            )
-            // Strip markdown so OS notifications display clean plain text
-            const rawPreview = lastMessage?.content?.substring(0, 200) || undefined
-            const preview = rawPreview ? stripMarkdown(rawPreview).substring(0, 100) || undefined : undefined
-            showSessionNotification(updatedSession, preview)
-
-            // In-app complement to the OS notification: when a *background*
-            // session (one not shown in any open panel) finishes, queue a chip
-            // above the chat. The OS notification above is suppressed while the
-            // window is focused, so the chip is the only completion signal then.
-            if (
-              store.get(showBackgroundFinishedChipAtom) &&
-              !store.get(visibleSessionIdsAtom).has(sessionId)
-            ) {
-              store.set(pushBackgroundFinishedAtom, {
-                sessionId,
-                title: getSessionTitle(updatedSession),
-                finishedAt: Date.now(),
-              })
-            }
+            if (deliverEffect) notifyCompletion(updatedSession,sessionId)
           }
         }
 
@@ -995,7 +1011,7 @@ function MainApp() {
       )
 
       // Handle side effects
-      handleEffects(effects, sessionId, event.type)
+      handleEffects(deliverEffect ? effects : effects.filter(e=>e.type!=='restore_input'), sessionId, event.type)
 
       // Handle background task events
       handleBackgroundTaskEvent(store, sessionId, event, agentEvent)

@@ -18,14 +18,15 @@ export function registerHistoryWindow(server: RpcServer, deps: HandlerDeps) {
     else entry.expires = setTimeout(() => chunks.delete(token), 60000)
     return {token,offset,next,data}
   }
-  server.handle(channel, async (ctx, id: string, cursor?: HistoryCursor, detail?:{token:string; offset:number}): Promise<SessionHistoryWindow | HistoryChunk> => {
+  server.handle(channel, async (ctx, id: string, cursor?: HistoryCursor, detail?:{token:string; offset:number}, submissionIds?: string[]): Promise<SessionHistoryWindow | HistoryChunk> => {
     const scope = () => ctx.workspaceId ?? (ctx.webContentsId != null ? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId) : null)
     const workspace = scope(), manager = deps.sessionManager
     if (!workspace || manager.getSessionSnapshot(id)?.workspaceId !== workspace) throw Error('History unavailable')
     const owner = JSON.stringify([ctx.clientId,workspace,id])
     if (detail) return piece(detail.token,owner,detail.offset)
+    if (submissionIds && (!Array.isArray(submissionIds) || submissionIds.length > 256 || submissionIds.some(id => typeof id !== 'string' || id.length > 128))) throw Error('Invalid submission query')
     const loaded = await manager.getSession(id)
-    const captured = manager.captureHistory?.(id)
+    const captured = manager.captureHistory?.(id, submissionIds)
     const session = manager.captureHistory ? captured?.session : loaded
     if (!session || session.workspaceId !== workspace || workspace !== scope() || manager.getSessionSnapshot(id)?.workspaceId !== workspace) throw Error('History changed')
     const epoch = manager.getHistoryRevision(id)
@@ -45,7 +46,7 @@ export function registerHistoryWindow(server: RpcServer, deps: HandlerDeps) {
     while (true) {
       const visible = messages.slice(start,end)
       if (published) visible.push(published)
-      const page = { metadata, messages:visible, pendingPermissions:cursor ? undefined : captured?.pendingPermissions, watermark:captured?.watermark, epoch, older:start ? {revision,length,before:messages[start].id} : null }
+      const page = { submissionState:captured?.submissionState, metadata, messages:visible, pendingPermissions:cursor ? undefined : captured?.pendingPermissions, watermark:captured?.watermark, epoch, older:start ? {revision,length,before:messages[start].id} : null }
       if (Buffer.byteLength(serializeEnvelope({type:'response',channel,id:'x'.repeat(128),result:page})) <= 127*1024) return page
       if (end-start <= 1) {
         const token = randomUUID(), body = serializeEnvelope({type:'response',id:'history',channel,result:page})

@@ -49,6 +49,7 @@ export type ColdHistoryPage =
 export interface HistoryCursor { revision: string; before: string; length?: number }
 export interface HistoryChunk { token: string; offset: number; next: number | null; data: string }
 export interface SessionHistoryWindow {
+  submissionState?: {cancelled:string[]; accepted:string[]}
   pendingPermissions?: PermissionRequest[]
   watermark?: number
   epoch?: string

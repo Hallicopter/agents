@@ -3,6 +3,23 @@ import {processEvent} from '../event-processor/processor'
 import type {AgentEvent,SessionState} from '../event-processor/types'
 
 type Event = SessionEvent & {historyEpoch?:string; historySeq?:number}
+// Renderer-local inspection state. No consumer may dispatch a send from this map.
+const uncertain = new Map<string, Map<string,Session['messages'][number]>>()
+const scope = (workspace:string,id:string) => JSON.stringify([workspace,id])
+export function unknownDeliveries(workspace:string,id:string) {return [...(uncertain.get(scope(workspace,id))?.values() ?? [])]}
+export function reconcileDelivery(workspace:string,id:string,event:Event) {
+  const pending = uncertain.get(scope(workspace,id))
+  if(event.type==='user_message') {pending?.delete(event.message.id);if(event.optimisticMessageId) pending?.delete(event.optimisticMessageId)}
+  if(event.type==='interrupted') for(const cancelled of event.cancelledIds ?? []) pending?.delete(cancelled)
+}
+const seenEffects=new Map<string,Set<number>>()
+export function claimHistoryEffect(workspace:string,event:Event) {
+  if((event.type!=='complete' && event.type!=='interrupted') || !event.historyEpoch || event.historySeq===undefined) return true
+  const key=JSON.stringify([workspace,event.sessionId,event.historyEpoch])
+  const seen=seenEffects.get(key) ?? new Set<number>()
+  if(seen.has(event.historySeq)) return false
+  seen.add(event.historySeq);seenEffects.set(key,seen);return true
+}
 const journals = new Map<string,Event[]>()
 const installed = new Map<string,{epoch:string;seq:number}>()
 export function beginHistory(id:string) {const events:Event[]=[]; journals.set(id,events); return events}
@@ -29,8 +46,18 @@ export function rebaseHistory(page:SessionHistoryWindow, events:Event[], current
     if(!['session_created','session_deleted','task_activity'].includes(event.type)) state=processEvent(state,event as AgentEvent).state
   }
   // A send may still be in transit. Never infer acceptance from the prompt text and never resend.
-  const known=new Set(state.session.messages.map(m=>m.id))
-  for(const m of current?.messages??[]) if(m.role==='user' && m.isPending && !known.has(m.id)) state.session={...state.session,messages:[...state.session.messages,m]}
+  quarantinePending(state.session,current,events,page.submissionState)
   if(page.epoch && page.watermark!==undefined) installed.set(session.id,{epoch:page.epoch,seq})
   return state.session
+}
+
+export function quarantinePending(session:Session,current:Session|null,events:Event[],dispositions?:SessionHistoryWindow['submissionState']) {
+  const key=scope(session.workspaceId,session.id)
+  const pending=uncertain.get(key) ?? new Map()
+  if(current?.workspaceId===session.workspaceId) for(const m of current.messages) if(m.role==='user' && m.isPending) pending.set(m.id,m)
+  uncertain.set(key,pending)
+  for(const id of [...dispositions?.accepted ?? [], ...dispositions?.cancelled ?? []]) pending.delete(id)
+  for(const m of session.messages) pending.delete(m.id)
+  for(const event of events) reconcileDelivery(session.workspaceId,session.id,event)
+  if(!pending.size) uncertain.delete(key)
 }

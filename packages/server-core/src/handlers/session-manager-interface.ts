@@ -108,7 +108,7 @@ export interface ISessionManager {
   recordPrAutoFixRun(sessionId: string, prId: string, signature: string[], at: number): void
   /** A session's metadata without loading its messages (cheap, unlike getSession). */
   getPublishedStream(id: string): import('@craft-agent/core/types').Message | undefined
-  captureHistory?(id: string): {session: Session; watermark: number; pendingPermissions?: import('@craft-agent/shared/protocol').PermissionRequest[]} | null
+  captureHistory?(id: string, submissionIds?: string[]): {submissionState?: {cancelled:string[]; accepted:string[]}; session: Session; watermark: number; pendingPermissions?: import('@craft-agent/shared/protocol').PermissionRequest[]} | null
   getHistoryRevision(sessionId: string): string | null
   getSessionSnapshot(sessionId: string): Session | null
   /** Start a hidden, app-labelled turn in an idle session; false (nothing sent) when missing or busy. */

@@ -252,7 +252,7 @@ export interface ElectronAPI {
   getSessions(request: import('@craft-agent/shared/protocol').SessionInventoryRequest): Promise<import('@craft-agent/shared/protocol').SessionInventoryPage | Session[]>
   getUnreadSummary(): Promise<UnreadSummary>
   markAllSessionsRead(workspaceId: string): Promise<void>
-  getSessionHistoryWindow(sessionId: string, cursor?: import('@craft-agent/shared/protocol').HistoryCursor, detail?: {token: string; offset: number}): Promise<import('@craft-agent/shared/protocol').SessionHistoryWindow | import('@craft-agent/shared/protocol').HistoryChunk>
+  getSessionHistoryWindow(sessionId: string, cursor?: import('@craft-agent/shared/protocol').HistoryCursor, detail?: {token: string; offset: number}, submissionIds?: string[]): Promise<import('@craft-agent/shared/protocol').SessionHistoryWindow | import('@craft-agent/shared/protocol').HistoryChunk>
   getSessionMessages(sessionId: string, options?: { scoped: true }): Promise<Session | null>
   createSession(workspaceId: string, options?: CreateSessionOptions): Promise<Session>
   deleteSession(sessionId: string): Promise<void>
