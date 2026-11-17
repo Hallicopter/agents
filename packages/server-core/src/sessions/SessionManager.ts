@@ -2759,7 +2759,18 @@ export class SessionManager implements ISessionManager {
    * `loadStoredSession` is synchronous (sync fs reads), so the entire path
    * stays sync — no microtask race window between the load and the enqueue.
    */
+  private readonly historyRevisions = new WeakMap<ManagedSession, string>()
+
+  getHistoryRevision(sessionId: string): string | null {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return null
+    let revision = this.historyRevisions.get(managed)
+    if (!revision) this.historyRevisions.set(managed, revision = randomUUID())
+    return revision
+  }
+
   private persistSession(managed: ManagedSession): void {
+    this.historyRevisions.delete(managed)
     if (!managed.messagesLoaded) {
       this.hydrateMessagesForColdPersist(managed)
     }

@@ -18,7 +18,7 @@ import { rendererPerf } from '@/lib/perf'
 import { isAbsolutePath } from '@/lib/drafts'
 import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
-import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
+import { loadOlderHistoryAtom, historyCoverageAtom, ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
 import { usePrWatch } from '@/hooks/usePrWatch'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
@@ -80,6 +80,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   // Track if messages are loaded for this session (for lazy loading)
   const loadedSessions = useAtomValue(loadedSessionsAtom)
+  const partial = useAtomValue(historyCoverageAtom).has(sessionId)
+  const loadOlder = useSetAtom(loadOlderHistoryAtom)
   const messagesLoaded = loadedSessions.has(sessionId)
 
   // Check if session exists in metadata (for loading state detection)
@@ -527,6 +529,12 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         onSetPrAutoFix={prWatch.setAutoFix}
         onPrCardOpenChange={prWatch.onCardOpenChange}
       />
+      {partial && <div role="status" className="px-4 py-1 text-xs text-muted-foreground">
+        Showing recent messages. Search and jumps cover loaded history only.{' '}
+        <button className="underline" onClick={() => loadOlder(sessionId).catch((e: Error) => toast.error(e.message))}>Load older messages</button>{' · '}
+        <button className="underline" onClick={handleRetryMessagesLoad}>Refresh recent messages</button>
+        {messagesLoadError && <span> {messagesLoadError}</span>}
+      </div>}
       <div className="flex-1 flex flex-col min-h-0">
         <ChatDisplay
           ref={chatDisplayRef}

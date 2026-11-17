@@ -163,6 +163,16 @@ export const sessionIdsAtom = atom<string[]>([])
  * Track which sessions have had their messages loaded (for lazy loading)
  * Sessions are loaded with empty messages initially, messages are fetched on-demand
  */
+type HistoryCursor = import('@craft-agent/shared/protocol').HistoryCursor
+export const historyCoverageAtom = atom(new Map<string, HistoryCursor>())
+function setCursor(get: Getter, set: Setter, id: string, cursor?: HistoryCursor | null) {
+  const current = get(historyCoverageAtom)
+  if (!cursor && !current.has(id)) return
+  const next = new Map(current)
+  if (cursor) next.set(id, cursor)
+  else next.delete(id)
+  set(historyCoverageAtom, next)
+}
 export const loadedSessionsAtom = atom<Set<string>>(new Set<string>())
 
 /**
@@ -255,6 +265,7 @@ export const updateSessionMetaAtom = atom(
 export const replaceLoadedSessionAtom = atom(
   null,
   (get, set, session: Session) => {
+    setCursor(get, set, session.id)
     set(sessionAtomFamily(session.id), session)
 
     const metaMap = get(sessionMetaMapAtom)
@@ -325,6 +336,7 @@ export const initializeSessionsAtom = atom(
   null,
   (get, set, sessions: Session[]) => {
     sessionLoadingPromises.clear()
+    set(historyCoverageAtom, new Map())
     // Clean up stale atom family entries from previous workspace.
     // Without this, switching workspaces leaves orphaned atoms in memory
     // and components subscribed to old session IDs see stale/empty data.
@@ -404,7 +416,7 @@ export const refreshSessionsMetadataAtom = atom(
       const currentSession = get(sessionAtomFamily(session.id))
       // Do not downgrade an already hydrated chat to a navigational placeholder.
       if (session.inventoryPartial && currentSession && !currentSession.inventoryPartial) continue
-      const shouldPreserveMessages = !!currentSession && loadedSessionIds.has(session.id)
+      const shouldPreserveMessages = !!currentSession && (loadedSessionIds.has(session.id) || get(historyCoverageAtom).has(session.id))
       const nextSession = shouldPreserveMessages && currentSession
         ? { ...session, messages: currentSession.messages }
         : session
@@ -479,6 +491,7 @@ export const removeSessionAtom = atom(
   null,
   (get, set, sessionId: string) => {
     sessionLoadingPromises.delete(sessionId)
+    setCursor(get, set, sessionId)
     // Clear session atom value first
     set(sessionAtomFamily(sessionId), null)
     // Remove atom from family cache to allow GC of the atom and its stored value
@@ -612,7 +625,7 @@ async function loadSessionMessages(
     const loadedSessions = get(loadedSessionsAtom)
 
     // Already loaded, return current session
-    if (loadedSessions.has(sessionId)) {
+    if (loadedSessions.has(sessionId) || get(historyCoverageAtom).has(sessionId)) {
       return get(sessionAtomFamily(sessionId))
     }
   }
@@ -629,7 +642,16 @@ async function loadSessionMessages(
   let loadPromise!: Promise<Session | null>
   loadPromise = (async (): Promise<Session | null> => {
     // Fetch messages from main process
-    const loadedSession = await window.electronAPI.getSessionMessages(sessionId, { scoped: true })
+    const api = window.electronAPI
+    let page: import('@craft-agent/shared/protocol').SessionHistoryWindow | undefined
+    if (api.getSessionHistoryWindow && api.isChannelAvailable?.('sessions:historyWindow')) {
+      try { page = await api.getSessionHistoryWindow(sessionId) }
+      catch (error) {
+        // Old servers without a channel list optimistically report availability.
+        if ((error as {code?:string}).code !== 'CHANNEL_NOT_FOUND') throw error
+      }
+    }
+    const loadedSession = page ? {...page.metadata, messages:page.messages} : await api.getSessionMessages(sessionId, { scoped: true })
     if (workspace !== get(windowWorkspaceIdAtom) || sessionLoadingPromises.get(sessionId) !== loadPromise) return null
     if (!loadedSession) {
       if (get(sessionAtomFamily(sessionId))?.inventoryPartial) return null
@@ -642,6 +664,9 @@ async function loadSessionMessages(
     // tokenUsage and sessionFolderPath are only returned by getSession() (not getSessions()),
     // so they must be explicitly merged here to be available after app restart.
     const existingSession = get(sessionAtomFamily(sessionId))
+    if (page && existingSession?.messages !== beforeLoad?.messages && existingSession?.messages.length) {
+      throw Error('New events arrived while loading; refresh recent messages')
+    }
     const preservedStaleMessages = !!existingSession
       && existingSession.messages.length > 0
       && (!loadedSession.messages || loadedSession.messages.length === 0)
@@ -671,7 +696,7 @@ async function loadSessionMessages(
           // empty messages if the session subprocess hasn't finished lazy-loading.
           messages: preservedStaleMessages
             ? existingSession.messages
-            : existingSession.isProcessing && existingSession.messages.length > 0
+            : !page && existingSession.isProcessing && existingSession.messages.length > 0
               ? existingSession.messages
               : loadedSession.messages,
           tokenUsage: loadedSession.tokenUsage ?? existingSession.tokenUsage,
@@ -698,7 +723,8 @@ async function loadSessionMessages(
     // Mark as loaded only when we received a fresh payload.
     // If we had to preserve stale in-memory messages because the backend returned
     // an empty array during lazy-load recovery, keep the session reloadable.
-    if (!preservedStaleMessages) {
+    setCursor(get, set, sessionId, page?.older)
+    if (!preservedStaleMessages && !page?.older) {
       const newLoadedSessions = new Set(get(loadedSessionsAtom))
       newLoadedSessions.add(sessionId)
       set(loadedSessionsAtom, newLoadedSessions)
@@ -716,6 +742,19 @@ async function loadSessionMessages(
     if (sessionLoadingPromises.get(sessionId) === loadPromise) sessionLoadingPromises.delete(sessionId)
   }
 }
+
+export const loadOlderHistoryAtom = atom(null, async (get, set, id: string) => {
+  const cursor = get(historyCoverageAtom).get(id)
+  const workspace = get(windowWorkspaceIdAtom)
+  if (!cursor) return
+  const page = await window.electronAPI.getSessionHistoryWindow(id, cursor)
+  const current = get(sessionAtomFamily(id))
+  if (!current || workspace !== get(windowWorkspaceIdAtom) || cursor !== get(historyCoverageAtom).get(id)) return
+  if (current.messages[0]?.id !== cursor.before || page.metadata.id !== id || page.metadata.workspaceId !== current.workspaceId) throw Error('History anchor changed; refresh recent messages')
+  set(sessionAtomFamily(id), {...current, messages:[...page.messages,...current.messages]})
+  setCursor(get, set, id, page.older)
+  if (!page.older) set(loadedSessionsAtom, new Set([...get(loadedSessionsAtom),id]))
+})
 
 export const ensureSessionMessagesLoadedAtom = atom(
   null,

@@ -107,6 +107,7 @@ export interface ISessionManager {
   /** Record an auto-fix run (time + the review signature it acted on). */
   recordPrAutoFixRun(sessionId: string, prId: string, signature: string[], at: number): void
   /** A session's metadata without loading its messages (cheap, unlike getSession). */
+  getHistoryRevision(sessionId: string): string | null
   getSessionSnapshot(sessionId: string): Session | null
   /** Start a hidden, app-labelled turn in an idle session; false (nothing sent) when missing or busy. */
   wakeIdleSessionWithNotice(sessionId: string, text: string): boolean

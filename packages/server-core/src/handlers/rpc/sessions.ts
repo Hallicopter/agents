@@ -1,3 +1,4 @@
+import { registerHistoryWindow } from './history-window'
 import { registerColdHistoryHandler } from './cold-history'
 import { inventoryPages, navigationSummary, INVENTORY_BYTES } from './session-inventory'
 import type { SessionInventoryRequest } from '@craft-agent/shared/protocol'
@@ -112,6 +113,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.sessions.CREATE,
   RPC_CHANNELS.sessions.DELETE,
   RPC_CHANNELS.sessions.GET_MESSAGES,
+  RPC_CHANNELS.sessions.HISTORY_WINDOW,
   RPC_CHANNELS.sessions.COLD_HISTORY_PAGE,
   RPC_CHANNELS.sessions.SEND_MESSAGE,
   RPC_CHANNELS.sessions.CANCEL,
@@ -137,6 +139,7 @@ export const HANDLED_CHANNELS = [
 
 export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): void {
   const { sessionManager, platform } = deps
+  registerHistoryWindow(server, deps)
   registerColdHistoryHandler(server, deps)
   const log = platform.logger
 

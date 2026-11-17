@@ -46,6 +46,13 @@ export type ColdHistoryPage =
   | { kind: 'page'; messages: Message[]; next: string | null }
   | { kind: 'unavailable'; reason: 'state-changed' | 'oversized' }
 
+export interface HistoryCursor { revision: string; before: string }
+export interface SessionHistoryWindow {
+  metadata: Omit<Session, 'messages'>
+  messages: Message[]
+  older: HistoryCursor | null
+}
+
 export interface SessionInventoryRequest {
   page: true
   next?: string
