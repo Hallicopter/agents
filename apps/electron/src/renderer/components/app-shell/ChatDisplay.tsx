@@ -515,13 +515,28 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     return count
   }, [])
 
+  // Keep only this panel's latest derived transcript. Grouping still handles
+  // every message/edit; structural sharing keeps unchanged completed cards out
+  // of the streaming render path. Never reuse across different sessions.
+  const previousTurnsRef = React.useRef<{ sessionId: string; turns: Turn[] } | null>(null)
+  const allTurns = React.useMemo(() => {
+    if (!session) {
+      previousTurnsRef.current = null
+      return []
+    }
+    const grouped = groupMessagesByTurn(session.messages, { isSessionProcessing: session.isProcessing })
+    const previous = previousTurnsRef.current
+    const turns = reuseUnchangedTurns(previous?.sessionId === session.id ? previous.turns : [], grouped)
+    previousTurnsRef.current = { sessionId: session.id, turns }
+    return turns
+  }, [session?.id, session?.messages, session?.isProcessing])
+
   // Find ALL individual match occurrences (not just turns)
   // Returns array with unique matchId for each occurrence
   const matchingOccurrences = useMemo(() => {
-    if (!searchQuery.trim() || !session?.messages) return []
-    const startTime = performance.now()
+    if (!searchQuery.trim()) return []
     const query = searchQuery.toLowerCase()
-    const turns = groupMessagesByTurn(session.messages, { isSessionProcessing: session.isProcessing })
+    const turns = allTurns
     const matches: { matchId: string; turnId: string; turnIndex: number; matchIndexInTurn: number }[] = []
 
     for (let turnIndex = 0; turnIndex < turns.length; turnIndex++) {
@@ -562,7 +577,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       }
     }
     return matches
-  }, [searchQuery, session?.messages, session?.isProcessing, countOccurrences])
+  }, [searchQuery, allTurns, countOccurrences])
 
   // Auto-expand pagination when search is active to show all matching turns
   // This ensures match count is stable and all matches are highlightable from the start
@@ -574,7 +589,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       (min, m) => m.turnIndex < min ? m.turnIndex : min,
       matchingOccurrences[0]!.turnIndex
     )
-    const totalTurns = groupMessagesByTurn(session?.messages || [], { isSessionProcessing: session?.isProcessing }).length
+    const totalTurns = allTurns.length
 
     // Calculate how many turns we need to show to include all matches
     // totalTurns - visibleTurnCount = startIndex, so we need visibleTurnCount = totalTurns - earliestMatchTurnIndex + buffer
@@ -583,7 +598,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     if (requiredVisibleCount > visibleTurnCount) {
       setVisibleTurnCount(requiredVisibleCount)
     }
-  }, [isSearchActive, matchingOccurrences, session?.messages, session?.isProcessing, visibleTurnCount])
+  }, [isSearchActive, matchingOccurrences, allTurns.length, visibleTurnCount])
 
   // Extract unique turn IDs that have matches (for highlighting)
   const matchingTurnIds = useMemo(() => {
@@ -1299,22 +1314,6 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     }
     return undefined
   }, [pendingPermission, pendingCredential])
-
-  // Keep only this panel's latest derived transcript. Grouping still handles
-  // every message/edit; structural sharing keeps unchanged completed cards out
-  // of the streaming render path. Never reuse across different sessions.
-  const previousTurnsRef = React.useRef<{ sessionId: string; turns: Turn[] } | null>(null)
-  const allTurns = React.useMemo(() => {
-    if (!session) {
-      previousTurnsRef.current = null
-      return []
-    }
-    const grouped = groupMessagesByTurn(session.messages, { isSessionProcessing: session.isProcessing })
-    const previous = previousTurnsRef.current
-    const turns = reuseUnchangedTurns(previous?.sessionId === session.id ? previous.turns : [], grouped)
-    previousTurnsRef.current = { sessionId: session.id, turns }
-    return turns
-  }, [session?.id, session?.messages, session?.isProcessing])
 
   // Keep ref in sync for scroll handler
   totalTurnCountRef.current = allTurns.length

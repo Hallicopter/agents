@@ -209,16 +209,8 @@ function getToolStatus(message: Message): ActivityStatus {
   return 'running'
 }
 
-/**
- * Convert message to ActivityItem with incremental depth calculation.
- * Depth is calculated immediately using existing activities, enabling
- * correct tree view rendering during streaming (not just on flush).
- *
- * @param message - The message to convert
- * @param existingActivities - Activities already in the turn (for depth lookup)
- */
-function messageToActivity(message: Message, existingActivities: ActivityItem[] = []): ActivityItem {
-  const activity: ActivityItem = {
+function messageToActivity(message: Message): ActivityItem {
+  return {
     id: message.id,
     type: 'tool' as ActivityType,
     status: getToolStatus(message),
@@ -242,25 +234,14 @@ function messageToActivity(message: Message, existingActivities: ActivityItem[] 
     isBackground: message.isBackground,
   }
 
-  // Calculate depth incrementally using existing activities
-  // This enables correct tree view rendering during streaming
-  if (activity.parentId) {
-    const parent = existingActivities.find(a => a.toolUseId === activity.parentId)
-    activity.depth = parent ? (parent.depth || 0) + 1 : 1
-  } else {
-    activity.depth = 0
-  }
-
-  return activity
 }
 
 /**
  * Calculate nesting depths for activities based on parent-child relationships.
  * Modifies activities in place, adding depth field (0 = root, 1 = child, etc.)
  *
- * Note: With incremental depth calculation in messageToActivity(), this function
- * serves as a safety net for edge cases (e.g., parent arrives after child) and
- * ensures all depths are correctly set when a turn is flushed.
+ * Every returned assistant turn passes through flushCurrentTurn, even while streaming.
+ * Resolve parents once there; scanning earlier activities on each insert is quadratic.
  */
 function calculateActivityDepths(activities: ActivityItem[]): void {
   // Build a map of toolUseId -> activity for fast parent lookup
@@ -566,8 +547,7 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
         }
       }
       // Always add to current turn (ignoring turnId differences)
-      // Pass existing activities for incremental depth calculation
-      currentTurn.activities.push(messageToActivity(message, currentTurn.activities))
+      currentTurn.activities.push(messageToActivity(message))
       currentTurn.isStreaming = !isToolComplete
       continue
     }
@@ -601,13 +581,6 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
           content: message.content,
           timestamp: message.timestamp,
           parentId: message.parentToolUseId,
-        }
-        // Calculate depth for intermediate messages too
-        if (intermediateActivity.parentId) {
-          const parent = currentTurn.activities.find(a => a.toolUseId === intermediateActivity.parentId)
-          intermediateActivity.depth = parent ? (parent.depth || 0) + 1 : 1
-        } else {
-          intermediateActivity.depth = 0
         }
         currentTurn.activities.push(intermediateActivity)
 
