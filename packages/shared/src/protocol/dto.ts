@@ -45,6 +45,18 @@ export type BuiltInStatusId = 'todo' | 'in-progress' | 'needs-review' | 'done' |
  * Electron-specific Session type (includes runtime state).
  * Extends core Session with messages array and processing state.
  */
+export interface SessionInventoryRequest {
+  page: true
+  next?: string
+  priorityIds?: string[]
+}
+export interface SessionInventoryPage {
+  sessions: Session[]
+  next: string | null
+  fragment?: string
+  endRow?: boolean
+}
+
 export interface Session {
   id: string
   workspaceId: string
@@ -58,6 +70,7 @@ export interface Session {
   isFlagged?: boolean
   /** Permission mode for this session ('safe', 'ask', 'guarded', 'allow-all') */
   permissionMode?: PermissionMode
+  previousPermissionMode?: PermissionMode
   sessionStatus?: SessionStatus
   /** Labels (additive tags, many-per-session — bare IDs or "id::value" entries) */
   labels?: string[]

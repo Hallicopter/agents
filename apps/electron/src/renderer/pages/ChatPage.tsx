@@ -46,6 +46,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     onRespondToPermission,
     onRespondToCredential,
     onSetActiveViewingSession,
+    reconcilePermissionModeState,
     getDraft,
     hydrateDraftAttachments,
     onInputChange,
@@ -84,6 +85,12 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // Check if session exists in metadata (for loading state detection)
   const sessionMetaMap = useAtomValue(sessionMetaMapAtom)
   const sessionMeta = sessionMetaMap.get(sessionId)
+  const sessionExists = !!sessionMeta
+
+  // Independent of transcript loading; a timeout cannot block the chat or splash.
+  React.useEffect(() => {
+    if (sessionExists) void reconcilePermissionModeState(sessionId)
+  }, [sessionId, sessionExists, reconcilePermissionModeState])
 
   // Fallback: ensure messages are loaded when session is viewed
   const ensureMessagesLoaded = useSetAtom(ensureSessionMessagesLoadedAtom)

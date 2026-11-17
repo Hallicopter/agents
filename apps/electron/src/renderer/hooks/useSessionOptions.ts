@@ -10,7 +10,7 @@
  * 3. Add UI control in FreeFormInput.tsx (or wherever needed)
  */
 
-import type { PermissionMode } from '../../shared/types'
+import type { PermissionMode, Session } from '../../shared/types'
 import type { ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
 import { DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
 
@@ -52,3 +52,28 @@ export function mergeSessionOptions(
   }
 }
 
+
+/** Fold list/getMessages metadata into UI options with one Map copy, not one per session. */
+export function mergeSessionOptionsFromSnapshots(
+  previous: Map<string, SessionOptions>,
+  sessions: Iterable<Pick<Session, 'id' | 'permissionMode' | 'previousPermissionMode' | 'thinkingLevel' | 'codingMode'>>,
+): Map<string, SessionOptions> {
+  const next = new Map(previous)
+  for (const session of sessions) {
+    const current = next.get(session.id)
+    const merged = mergeSessionOptions(current, {
+      permissionMode: current?.permissionModeVersion != null ? current.permissionMode : session.permissionMode ?? defaultSessionOptions.permissionMode,
+      previousPermissionMode: current?.permissionModeVersion != null ? current.previousPermissionMode : session.previousPermissionMode,
+      thinkingLevel: session.thinkingLevel ?? defaultSessionOptions.thinkingLevel,
+      codingMode: session.codingMode === true,
+    })
+    if (merged.permissionMode === defaultSessionOptions.permissionMode
+      && merged.thinkingLevel === defaultSessionOptions.thinkingLevel
+      && !merged.codingMode && merged.previousPermissionMode == null && merged.permissionModeVersion == null) {
+      next.delete(session.id)
+    } else {
+      next.set(session.id, merged)
+    }
+  }
+  return next
+}

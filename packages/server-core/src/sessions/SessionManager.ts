@@ -3155,6 +3155,14 @@ export class SessionManager implements ISessionManager {
     return result
   }
 
+  getSessionInventoryIds(workspaceId?: string, priorityIds: string[] = []): string[] {
+    const priority = new Set(priorityIds)
+    const rank = (s: ManagedSession) => priority.has(s.id) ? 0 : s.hidden || s.isArchived || s.parentSessionId ? 2 : 1
+    return Array.from(this.sessions.values()).filter(s => !workspaceId || s.workspace.id === workspaceId)
+      .sort((a, b) => rank(a) - rank(b) || (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0))
+      .map(s => s.id)
+  }
+
   getSessions(workspaceId?: string): Session[] {
     // Returns session metadata only - messages are NOT included to save memory
     // Use getSession(id) to load messages for a specific session

@@ -5,7 +5,7 @@ import { useSetAtom, useStore, useAtomValue, useAtom } from 'jotai'
 import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, SetupNeeds, SessionStatus, NewChatActionParams, ContentBadge, LlmConnectionWithStatus, PermissionModeState } from '../shared/types'
 import type { SessionDraft, DraftAttachmentRef } from '@craft-agent/shared/config'
 import type { SessionOptions, SessionOptionUpdates } from './hooks/useSessionOptions'
-import { defaultSessionOptions, mergeSessionOptions } from './hooks/useSessionOptions'
+import { defaultSessionOptions, mergeSessionOptions, mergeSessionOptionsFromSnapshots } from './hooks/useSessionOptions'
 import { generateMessageId } from '../shared/types'
 import { useEventProcessor } from './event-processor'
 import type { AgentEvent, Effect } from './event-processor'
@@ -32,7 +32,6 @@ import { coerceInputText } from './lib/input-text'
 import { getSessionsToRefreshAfterStaleReconnect } from './lib/reconnect-recovery'
 import { formatSessionLoadFailure, shouldTreatSessionLoadFailureAsTransportFallback } from './lib/session-load'
 import { extractWorkspaceSlugFromPath } from '@craft-agent/shared/utils/workspace-slug'
-import { DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
 import { initRendererPerf } from './lib/perf'
 import {
   initializeSessionsAtom,
@@ -48,7 +47,6 @@ import {
   forceSessionMessagesReloadAtom,
   backgroundTasksAtomFamily,
   windowWorkspaceIdAtom,
-  type SessionMeta,
   type BackgroundTask,
 } from '@/atoms/sessions'
 import { sourcesAtom } from '@/atoms/sources'
@@ -79,7 +77,10 @@ import {
   markLiveBackgroundTasksOrphaned,
 } from '@/components/app-shell/background-task-chip-state'
 import { getFileManagerName } from '@/lib/platform'
-import { rendererLog } from '@/lib/logger'
+import { openInventory } from './lib/session-inventory'
+import * as storage from './lib/local-storage'
+import { parseRouteToNavigationState } from '../shared/route-parser'
+import { isSessionsNavigation } from '../shared/types'
 import { ActionRegistryProvider } from '@/actions'
 import { toast } from 'sonner'
 import { DesktopWindow } from '@/components/desktop/DesktopWindow'
@@ -88,32 +89,6 @@ type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'read
 
 /** Type for the Jotai store returned by useStore() */
 type JotaiStore = ReturnType<typeof getDefaultStore>
-
-type SessionListRefreshOptions = {
-  removeMissing?: boolean
-  reason?: string
-  selectedSessionId?: string | null
-}
-
-const SESSION_REFRESH_LOG_ID_LIMIT = 25
-
-function summarizeIds(ids: Iterable<string>, limit = SESSION_REFRESH_LOG_ID_LIMIT) {
-  const all = Array.from(ids)
-  return {
-    count: all.length,
-    ids: all.slice(0, limit),
-    truncated: all.length > limit,
-  }
-}
-
-function workspaceDistribution(sessions: Iterable<{ workspaceId?: string }>): Record<string, number> {
-  const distribution: Record<string, number> = {}
-  for (const session of sessions) {
-    const key = session.workspaceId || '(missing)'
-    distribution[key] = (distribution[key] ?? 0) + 1
-  }
-  return distribution
-}
 
 /**
  * Helper to handle background task events from the agent.
@@ -489,8 +464,9 @@ function MainApp() {
 
   const reconcilePermissionModeState = useCallback(async (sessionId: string) => {
     try {
+      const workspace = store.get(windowWorkspaceIdAtom)
       const state = await window.electronAPI.getSessionPermissionModeState(sessionId)
-      if (!state) return
+      if (!state || workspace !== store.get(windowWorkspaceIdAtom) || !store.get(sessionMetaMapAtom).has(sessionId)) return
       applyPermissionModeState(sessionId, state, 'reconcile')
     } catch (error) {
       window.electronAPI.debugLog('[ModeSync] Failed to reconcile permission mode', {
@@ -498,34 +474,13 @@ function MainApp() {
         error: error instanceof Error ? error.message : String(error),
       })
     }
-  }, [applyPermissionModeState])
+  }, [applyPermissionModeState, store])
 
   // Event processor hook - handles all agent events through pure functions
   const { processAgentEvent, clearStreamingState } = useEventProcessor()
 
   const syncSessionOptionsFromSession = useCallback((session: Session) => {
-    setSessionOptions(prev => {
-      const next = new Map(prev)
-      const current = next.get(session.id)
-      const merged = {
-        ...defaultSessionOptions,
-        ...current,
-        permissionMode: session.permissionMode ?? defaultSessionOptions.permissionMode,
-        thinkingLevel: session.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
-        codingMode: session.codingMode === true,
-      }
-
-      const hasNonDefaultMode = merged.permissionMode !== defaultSessionOptions.permissionMode
-      const hasNonDefaultThinking = merged.thinkingLevel !== DEFAULT_THINKING_LEVEL
-
-      if (!hasNonDefaultMode && !hasNonDefaultThinking && !merged.codingMode && merged.permissionModeVersion == null) {
-        next.delete(session.id)
-      } else {
-        next.set(session.id, merged)
-      }
-
-      return next
-    })
+    setSessionOptions(prev => mergeSessionOptionsFromSnapshots(prev, [session]))
   }, [])
 
   const refreshSessionFromServer = useCallback(async (sessionId: string): Promise<'refreshed' | 'preserved_stale_messages' | 'failed'> => {
@@ -550,126 +505,68 @@ function MainApp() {
     }
   }, [clearStreamingState, replaceLoadedSession, syncSessionOptionsFromSession, reconcilePermissionModeState, store])
 
-  const loadSessionsFromServer = useCallback(async () => {
-    setSessionLoadError(null)
-
+  const inventory = useRef<{
+    read: ReturnType<typeof openInventory>; busy: boolean; more: boolean; deleted: Set<string>
+  } | null>(null)
+  const [inventoryStatus, setInventoryStatus] = useState<'complete' | 'partial' | 'loading' | 'error'>('complete')
+  const readInventoryPage = useCallback(async () => {
+    const scan = inventory.current
+    if (!scan || scan.busy || !scan.more) return
+    scan.busy = true
+    setInventoryStatus('loading')
+    const before = store.get(sessionMetaMapAtom)
     try {
-      const loadedSessions = await window.electronAPI.getSessions()
-
-      // Initialize per-session atoms and metadata map
-      // NOTE: No sessionsAtom used - sessions are only in per-session atoms
-      initializeSessions(loadedSessions)
-
-      // Initialize unified sessionOptions from session data
-      const optionsMap = new Map<string, SessionOptions>()
-      for (const s of loadedSessions) {
-        const hasNonDefaultMode = s.permissionMode && s.permissionMode !== 'ask'
-        const hasNonDefaultThinking = s.thinkingLevel && s.thinkingLevel !== DEFAULT_THINKING_LEVEL
-        if (hasNonDefaultMode || hasNonDefaultThinking || s.codingMode) {
-          optionsMap.set(s.id, {
-            permissionMode: s.permissionMode ?? 'ask',
-            thinkingLevel: s.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
-            codingMode: s.codingMode === true,
-          })
-        }
-      }
-      setSessionOptions(optionsMap)
-
-      await Promise.allSettled(
-        loadedSessions.map((s) => reconcilePermissionModeState(s.id))
-      )
-
-      setSessionsLoaded(true)
-
-      if (initialSessionId && windowWorkspaceId) {
-        const session = loadedSessions.find(s => s.id === initialSessionId)
-        if (session) {
-          navigate(routes.view.allSessions(session.id))
-        }
-      }
-    } catch (err) {
-      console.error('[App] Failed to load sessions:', err)
-      const transportState = await window.electronAPI.getTransportConnectionState().catch(() => null)
-
-      if (shouldTreatSessionLoadFailureAsTransportFallback(transportState)) {
-        console.error('[App] Treating session load failure as transport fallback:', transportState)
-        setSessionsLoaded(true)
-        setSessionLoadError(null)
-        return
-      }
-
-      setSessionLoadError(formatSessionLoadFailure(err))
-      setSessionsLoaded(true)
-    }
-  }, [initializeSessions, initialSessionId, reconcilePermissionModeState, windowWorkspaceId])
-
-  const refreshSessionListMetadataFromServer = useCallback(async (options: SessionListRefreshOptions = {}): Promise<Map<string, SessionMeta> | null> => {
-    const {
-      removeMissing = true,
-      reason = 'manual-or-authoritative',
-      selectedSessionId = null,
-    } = options
-    const beforeMetaMap = store.get(sessionMetaMapAtom)
-    const beforeIds = new Set(beforeMetaMap.keys())
-    const transportState = await window.electronAPI.getTransportConnectionState().catch(() => null)
-
-    try {
-      const sessions = await window.electronAPI.getSessions()
-      const returnedIds = new Set(sessions.map(s => s.id))
-      const missingIds = Array.from(beforeIds).filter(id => !returnedIds.has(id))
-      const addedIds = sessions.map(s => s.id).filter(id => !beforeIds.has(id))
-      const logPayload = {
-        reason,
-        removeMissing,
-        windowWorkspaceId,
-        windowRemoteWorkspaceId,
-        selectedSessionId,
-        beforeCount: beforeIds.size,
-        returnedCount: sessions.length,
-        beforeIds: summarizeIds(beforeIds),
-        returnedIds: summarizeIds(returnedIds),
-        missingIds: summarizeIds(missingIds),
-        addedIds: summarizeIds(addedIds),
-        beforeWorkspaceIds: workspaceDistribution(beforeMetaMap.values()),
-        returnedWorkspaceIds: workspaceDistribution(sessions),
-        transportState,
-      }
-
-      rendererLog.info('[App] Session list metadata refresh result', logPayload)
-      if (!removeMissing && missingIds.length > 0) {
-        rendererLog.warn('[App] Non-destructive refresh preserved sessions omitted by getSessions(); this indicates a partial backend response or workspace-context mismatch', logPayload)
-      }
-
-      const loadedSessionIds = store.get(loadedSessionsAtom)
-
-      // Single transactional atom write — all cross-atom mutations happen
-      // inside one Jotai write function so React subscribers see one
-      // consistent update instead of intermediate states.
-      const nextMetaMap = store.set(refreshSessionsMetadataAtom, { sessions, loadedSessionIds, removeMissing })
-
-      // Sync app-level state (React hooks / non-atom concerns) after the atom transaction
-      for (const session of sessions) {
-        syncSessionOptionsFromSession(session)
-      }
-      await Promise.allSettled(sessions.map(s => reconcilePermissionModeState(s.id)))
-
-      return nextMetaMap
-    } catch (err) {
-      rendererLog.error('[App] Failed to refresh session list metadata after reconnect:', {
-        reason,
-        removeMissing,
-        windowWorkspaceId,
-        windowRemoteWorkspaceId,
-        selectedSessionId,
-        beforeCount: beforeIds.size,
-        beforeIds: summarizeIds(beforeIds),
-        beforeWorkspaceIds: workspaceDistribution(beforeMetaMap.values()),
-        transportState,
-        error: err,
+      const { sessions, more } = await scan.read()
+      if (inventory.current !== scan) return
+      const current = store.get(sessionMetaMapAtom)
+      // A live event/selection may have published newer metadata during the RPC.
+      const rows = sessions.filter(s => !scan.deleted.has(s.id) && before.get(s.id) === current.get(s.id))
+      const meta = store.set(refreshSessionsMetadataAtom, {
+        sessions: rows, loadedSessionIds: store.get(loadedSessionsAtom), removeMissing: false,
       })
-      return null
+      setSessionOptions(prev => mergeSessionOptionsFromSnapshots(prev, rows))
+      scan.more = more
+      setInventoryStatus(more ? 'partial' : 'complete')
+      setSessionsLoaded(true)
+      return meta
+    } finally { scan.busy = false }
+  }, [store])
+
+  const loadSessionsFromServer = useCallback(async (selected?: string | null) => {
+    setSessionLoadError(null)
+    const params = new URLSearchParams(window.location.search)
+    const priorities = [selected, initialSessionId]
+    for (const route of [params.get('route'), ...(params.get('panels') ?? '').split(',')]) {
+      const state = route && parseRouteToNavigationState(route.replace(/:[0-9.]+$/, ''))
+      if (state && isSessionsNavigation(state)) priorities.push(state.details?.sessionId ?? null)
     }
-  }, [store, syncSessionOptionsFromSession, reconcilePermissionModeState, windowWorkspaceId, windowRemoteWorkspaceId])
+    if (windowWorkspaceId) priorities.push(storage.get<string | null>(storage.KEYS.lastSelectedSessionId, null, windowWorkspaceId))
+    const scan = { read: openInventory(priorities.filter((id): id is string => !!id), req => window.electronAPI.getSessions(req)), busy: false, more: true, deleted: new Set<string>() }
+    inventory.current = scan
+    try {
+      const meta = await readInventoryPage()
+      if (inventory.current !== scan) return
+      if (!selected && initialSessionId && meta?.has(initialSessionId)) navigate(routes.view.allSessions(initialSessionId))
+      return meta
+    } catch (err) {
+      if (inventory.current !== scan) return
+      setInventoryStatus('error')
+      const state = await window.electronAPI.getTransportConnectionState().catch(() => null)
+      if (inventory.current !== scan) return
+      if (!store.get(sessionMetaMapAtom).size && !shouldTreatSessionLoadFailureAsTransportFallback(state)) setSessionLoadError(formatSessionLoadFailure(err))
+      setSessionsLoaded(true)
+    }
+  }, [initialSessionId, windowWorkspaceId, readInventoryPage, store])
+
+  const loadMoreSessions = useCallback(async (all: boolean) => {
+    const scan = inventory.current
+    if (!scan || scan.busy) return
+    try {
+      do { await readInventoryPage() } while (all && inventory.current === scan && scan.more)
+    } catch {
+      if (inventory.current === scan) setInventoryStatus('error')
+    }
+  }, [readInventoryPage])
 
   // Stale session watchdog — catches stuck sessions that the reconnect protocol misses
   const { trackSessionActivity } = useStaleSessionRecovery({
@@ -824,6 +721,7 @@ function MainApp() {
         sessionDraftsRef.current = new Map(Object.entries(drafts))
       }
     })
+    return () => { inventory.current = null }
   }, [appState, loadSessionsFromServer, resolveDefaultConnectionSlug])
 
   // Subscribe to LLM connections change events (live updates when models are fetched)
@@ -973,8 +871,11 @@ function MainApp() {
 
       // Session lifecycle events are handled explicitly (not by the agent event processor).
       if (event.type === 'session_created') {
+        const workspace = store.get(windowWorkspaceIdAtom)
+        const scan = inventory.current
         window.electronAPI.getSessionMessages(sessionId)
           .then((createdSession: Session | null) => {
+            if (workspace !== store.get(windowWorkspaceIdAtom) || scan?.deleted.has(sessionId) || inventory.current?.deleted.has(sessionId)) return
             if (createdSession) {
               const existingMeta = store.get(sessionMetaMapAtom).has(sessionId)
               if (existingMeta) {
@@ -985,13 +886,14 @@ function MainApp() {
               syncSessionOptionsFromSession(createdSession)
               return
             }
-            return window.electronAPI.getSessions().then(initializeSessions)
+            // Creation may have raced a delete; never replace the list with a partial page.
           })
           .catch((error: unknown) => console.error('Failed to handle session_created event:', error))
         return
       }
 
       if (event.type === 'session_deleted') {
+        inventory.current?.deleted.add(sessionId)
         removeSession(sessionId)
         return
       }
@@ -1125,11 +1027,10 @@ function MainApp() {
 
       console.warn('[App] Stale reconnect — refreshing session metadata and active/processing sessions')
 
-      const refreshedMetaMap = await refreshSessionListMetadataFromServer({
-        removeMissing: false,
-        reason: 'stale-reconnect',
-        selectedSessionId: sessionSelection.selected,
-      })
+      const pending = loadSessionsFromServer(sessionSelection.selected)
+      const scan = inventory.current
+      const refreshedMetaMap = await pending
+      if (inventory.current !== scan) return
       const metaMap = refreshedMetaMap ?? store.get(sessionMetaMapAtom)
       const refreshIds = getSessionsToRefreshAfterStaleReconnect(metaMap, sessionSelection.selected)
 
@@ -1166,7 +1067,7 @@ function MainApp() {
     })
 
     return cleanup
-  }, [store, sessionSelection.selected, refreshSessionFromServer, refreshSessionListMetadataFromServer])
+  }, [store, sessionSelection.selected, refreshSessionFromServer, loadSessionsFromServer])
 
   // Listen for menu bar events
   useEffect(() => {
@@ -1826,6 +1727,9 @@ function MainApp() {
       await window.electronAPI.switchWorkspace(workspaceId)
 
       // 2. Update React state to trigger re-renders
+      inventory.current = null
+      setSessionsLoaded(false)
+      initializeSessions([])
       setWindowWorkspaceId(workspaceId)
 
       // 3. Clear selected session - the old session belongs to the previous workspace
@@ -1861,7 +1765,7 @@ function MainApp() {
       // Sessions and theme will reload automatically due to windowWorkspaceId dependency
       // in useEffect hooks.
     }
-  }, [windowWorkspaceId, setSession, store])
+  }, [windowWorkspaceId, setSession, store, initializeSessions])
 
   // Handle workspace switch by slug (called by NavigationContext on popstate when ?ws= changes)
   const handleSwitchWorkspaceBySlug = useCallback((slug: string) => {
@@ -1900,6 +1804,7 @@ function MainApp() {
     getDraftAttachmentRefs,
     hydrateDraftAttachments,
     sessionOptions,
+    reconcilePermissionModeState,
     // Session callbacks
     onCreateSession: handleCreateSession,
     onSendMessage: handleSendMessage,
@@ -1946,6 +1851,7 @@ function MainApp() {
     getDraftAttachmentRefs,
     hydrateDraftAttachments,
     sessionOptions,
+    reconcilePermissionModeState,
     handleCreateSession,
     handleSendMessage,
     handleRenameSession,
@@ -2123,6 +2029,16 @@ function MainApp() {
                 state={connectionState}
                 onRetry={handleReconnectTransport}
               />
+            )}
+            {sessionsLoaded && !sessionLoadError && inventoryStatus !== 'complete' && (
+              <div className="px-3 py-1 text-xs bg-muted" role="status">
+                Session list, filters and search cover loaded chats only.{' '}
+                {inventoryStatus === 'error' ? <button className="underline" onClick={() => void loadSessionsFromServer()}>Retry session list</button>
+                  : inventoryStatus === 'loading' ? 'Loading…' : <>
+                    <button className="underline" onClick={() => void loadMoreSessions(false)}>Load more</button>{' · '}
+                    <button className="underline" onClick={() => void loadMoreSessions(true)}>Load all for workspace-wide results</button>
+                  </>}
+              </div>
             )}
             <div className="flex-1 min-h-0">
               {sessionLoadError ? (

@@ -1,3 +1,5 @@
+import { inventoryPages } from './session-inventory'
+import type { SessionInventoryRequest } from '@craft-agent/shared/protocol'
 import { readFile, writeFile, stat } from 'fs/promises'
 import { join } from 'path'
 import { RPC_CHANNELS, type FileAttachment, type SendMessageOptions, type SessionEvent } from '@craft-agent/shared/protocol'
@@ -137,7 +139,9 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
 
   // Get all sessions for the calling window's workspace
   // Waits for initialization to complete so sessions are never returned empty during startup
-  server.handle(RPC_CHANNELS.sessions.GET, async (ctx) => {
+  // At most one cursor per connection; abandon old scans on retry and expire idle IDs.
+  const scans = new Map<string, { workspaceId: string | undefined; token: string; pages: ReturnType<typeof inventoryPages>; expiry: ReturnType<typeof setTimeout> }>()
+  server.handle(RPC_CHANNELS.sessions.GET, async (ctx, request?: SessionInventoryRequest) => {
     try {
       await sessionManager.waitForSessionsLoaded()
     } catch (error) {
@@ -148,6 +152,33 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
       ? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId)
       : undefined
     const workspaceId = ctx.workspaceId ?? windowWorkspaceId
+    if (request?.page === true) {
+      const scope = workspaceId ?? undefined
+      let scan = scans.get(ctx.clientId)
+      if (request.next !== undefined) {
+        if (!scan || scan.workspaceId !== scope || request.next !== scan.token) throw new Error('Session inventory cursor expired; retry loading')
+      } else {
+        if (scan) clearTimeout(scan.expiry)
+        const priorities = Array.isArray(request.priorityIds) ? request.priorityIds.slice(0, 32) : []
+        const ids = sessionManager.getSessionInventoryIds(scope, priorities)
+        const pages = inventoryPages(ids, id => {
+          const s = sessionManager.getSessionSnapshot(id)
+          return s && (!scope || s.workspaceId === scope) ? s : null
+        })
+        const expiry = setTimeout(() => scans.delete(ctx.clientId), 120_000)
+        expiry.unref()
+        scan = { workspaceId: scope, token: '', pages, expiry }; scans.set(ctx.clientId, scan)
+      }
+      scan.expiry.refresh()
+      const result = scan.pages.next()
+      end()
+      if (result.done) {
+        clearTimeout(scan.expiry); scans.delete(ctx.clientId)
+        return { ...result.value, next: null }
+      }
+      scan.token = crypto.randomUUID()
+      return { ...result.value, next: scan.token }
+    }
     const sessions = sessionManager.getSessions(workspaceId ?? undefined)
     end()
 

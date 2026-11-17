@@ -79,6 +79,8 @@ export interface AppShellContextType {
   // Unified session options map
   /** All session-scoped options in one map. Use useSessionOptionsFor() hook for easy access. */
   sessionOptions: Map<string, SessionOptions>
+  /** Refresh authoritative diagnostics for an opened chat, not for list rows. */
+  reconcilePermissionModeState: (sessionId: string) => Promise<void>
 
   // Session callbacks
   onCreateSession: (workspaceId: string, options?: import('../../shared/types').CreateSessionOptions) => Promise<Session>

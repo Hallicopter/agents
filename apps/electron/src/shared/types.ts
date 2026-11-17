@@ -249,6 +249,7 @@ export interface ElectronAPI {
   setDesktopInputActive(active: boolean): void
   // Session management
   getSessions(): Promise<Session[]>
+  getSessions(request: import('@craft-agent/shared/protocol').SessionInventoryRequest): Promise<import('@craft-agent/shared/protocol').SessionInventoryPage | Session[]>
   getUnreadSummary(): Promise<UnreadSummary>
   markAllSessionsRead(workspaceId: string): Promise<void>
   getSessionMessages(sessionId: string): Promise<Session | null>

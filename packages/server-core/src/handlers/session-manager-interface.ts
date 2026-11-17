@@ -49,6 +49,7 @@ export interface ISessionManager {
   // Session CRUD
   // ---------------------------------------------------------------------------
 
+  getSessionInventoryIds(workspaceId?: string, priorityIds?: string[]): string[]
   getSessions(workspaceId?: string): Session[]
   getSession(sessionId: string): Promise<Session | null>
   /** Creates a session and (unless `internal.emitCreatedEvent === false`) announces it to the
