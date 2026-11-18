@@ -28,6 +28,11 @@ export function forgetHistory(id?:string) {if(id===undefined){installed.clear();
 export function observeHistory(id:string,event:Event) {
   const stamp=installed.get(id)
   if(stamp && event.historyEpoch===stamp.epoch && event.historySeq!==undefined && event.historySeq<=stamp.seq) return false
+  // Advance only across consecutive live events. A jump is not proof that
+  // intervening frames were delivered; never mark the missing range covered.
+  if (stamp && event.historyEpoch === stamp.epoch && event.historySeq === stamp.seq + 1) {
+    stamp.seq = event.historySeq
+  }
   journals.get(id)?.push(event)
   return true
 }
