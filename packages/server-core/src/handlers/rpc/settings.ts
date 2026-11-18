@@ -111,7 +111,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
 
   // Set session-specific model (and optionally connection)
   server.handle(RPC_CHANNELS.sessions.SET_MODEL, async (_ctx, sessionId: string, workspaceId: string, model: string | null, connection?: string) => {
-    await deps.sessionManager.updateSessionModel(sessionId, workspaceId, model, connection)
+    await deps.sessionManager.updateSessionModel(sessionId, workspaceId, model, connection, true)
     deps.platform.logger.info(`Session ${sessionId} model updated to: ${model}${connection ? ` (connection: ${connection})` : ''}`)
   })
 

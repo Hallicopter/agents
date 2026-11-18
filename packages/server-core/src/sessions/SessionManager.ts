@@ -93,7 +93,7 @@ import { toolMetadataStore, getLastApiError } from '@craft-agent/shared/intercep
 import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { redactBrowserPasswordFills } from '@craft-agent/shared/agent'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
-import { getCredentialManager } from '@craft-agent/shared/credentials'
+import { getCredentialManager, selectGrant, SecureStorageBackend, currentOAuthRevision, allowsDispatch, type SelectedGrant } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
 import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type BackgroundTaskOutput, type StopBackgroundTaskResult, type BoundPr, type PrMonitorState, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { launchOutputFile, readBackgroundTaskOutput } from './background-task-output'
@@ -727,6 +727,11 @@ interface RunningBackgroundTask {
   stopRequestedAt?: number
 }
 
+function nativeCodexConnection(slug?: string) {
+  const conn = slug && getLlmConnection(slug)
+  return conn && conn.providerType === 'pi' && conn.authType === 'oauth' && conn.piAuthProvider === 'openai-codex' && !conn.baseUrl && !conn.customEndpoint ? conn : undefined
+}
+
 interface ManagedSession {
   id: string
   workspace: Workspace
@@ -918,6 +923,9 @@ interface ManagedSession {
   lastSentOptions?: SendMessageOptions
   // Flag to prevent infinite retry loops (reset at start of each sendMessage)
   authRetryAttempted?: boolean
+  /** Sticky for this turn even if the selection changes before its error arrives. */
+  ultraTurnNoReplay?: boolean
+  ultraGrant?: SelectedGrant
   // Flag indicating auth retry is in progress (to prevent complete handler from interfering)
   authRetryInProgress?: boolean
   // Whether this session is hidden from session list (e.g., mini edit sessions)
@@ -1153,6 +1161,7 @@ export function createManagedSession(
     }),
     // Caller overrides (permissionMode defaults, thinkingLevel, messagesLoaded, etc.)
     ...overrides,
+    ultraGrant: undefined, // Never restore picker consent from a header, branch, or import.
   } as ManagedSession
 
   if (managed.branchFromMessageId && !managed.branchContextStrategy) {
@@ -4381,6 +4390,11 @@ export class SessionManager implements ISessionManager {
         miniModel,
         thinkingLevel: managed.thinkingLevel,
         session: sessionConfig,
+        authorizeUltra: (nonce, proof) => allowsDispatch(() => managed.model === 'pi/gpt-6.2-sol-ultrafast' ? managed.ultraGrant : undefined,
+          () => {
+            const conn = nativeCodexConnection(managed.llmConnection)
+            return conn?.createdAt === managed.ultraGrant?.connectionCreatedAt ? conn?.slug : undefined
+          }, nonce, proof, async slug => SecureStorageBackend.readOAuthSnapshot(slug)?.value, currentOAuthRevision),
         onSdkSessionIdUpdate,
         onSdkSessionIdCleared,
         onBranchForkInvalidated,
@@ -6345,10 +6359,19 @@ export class SessionManager implements ISessionManager {
    * Pass null to clear the session-specific model (will use global config)
    * @param connection - Optional LLM connection slug (only applied if not already locked)
    */
-  async updateSessionModel(sessionId: string, workspaceId: string, model: string | null, connection?: string): Promise<void> {
+  async updateSessionModel(sessionId: string, workspaceId: string, model: string | null, connection?: string, picker = false): Promise<void> {
     sessionLog.info(`[updateSessionModel] sessionId=${sessionId}, model=${model}, connection=${connection}`)
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      managed.ultraGrant = undefined
+      if (model === 'pi/gpt-6.2-sol-ultrafast') {
+        const conn = nativeCodexConnection(connection)
+        if (!picker || !connection || !conn || (managed.connectionLocked && managed.llmConnection !== connection)) throw new Error('Select Ultrafast on the signed-in Codex connection')
+        if (managed.isProcessing || managed.messageQueue.length) throw new Error('Select Ultrafast after pending work finishes')
+        const cred = SecureStorageBackend.readOAuthSnapshot(connection)
+        if (!cred?.value || cred.revision !== currentOAuthRevision(connection)) throw new Error('Sign in and reselect Ultrafast')
+        managed.ultraGrant = selectGrant(connection, cred.value, cred.revision, conn.createdAt)
+      }
       managed.model = model ?? undefined
       // Also update connection if provided and not already locked
       if (connection && !managed.connectionLocked) {
@@ -6734,6 +6757,17 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session ${sessionId} not found`)
     }
+    const premium = managed.model === 'pi/gpt-6.2-sol-ultrafast'
+    const selected = managed.ultraGrant
+    if (premium) {
+      if (!selected || options?.hidden || _isAuthRetry) throw new Error('Select Ultrafast before sending')
+      const prior = authorize
+      authorize = () => {
+        prior?.()
+        const conn = nativeCodexConnection(managed.llmConnection)
+        if (managed.ultraGrant !== selected || conn?.slug !== selected.slug || conn.createdAt !== selected.connectionCreatedAt || currentOAuthRevision(selected.slug) !== selected.revision || managed.model !== 'pi/gpt-6.2-sol-ultrafast') throw new Error('Ultrafast selection changed; resend explicitly')
+      }
+    }
     authorize?.()
     this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
 
@@ -6993,6 +7027,7 @@ export class SessionManager implements ISessionManager {
     // and resetting it would allow infinite retry loops
     // Note: authRetryInProgress is NOT reset here - it's managed by the retry logic
     if (!_isAuthRetry) {
+      managed.ultraTurnNoReplay = managed.model === 'pi/gpt-6.2-sol-ultrafast'
       managed.authRetryAttempted = false
     }
 
@@ -7208,6 +7243,7 @@ export class SessionManager implements ISessionManager {
       // task's spec then goes with the next turn).
       const sessionContext = isCompactCommand ? null : this.takeTaskSessionContext(managed, _isAuthRetry)
       const chatOptions: ChatOptions = {
+        ...(premium ? { ultraNonce: selected!.nonce } : {}),
         ...(thinkingOverride ? { thinkingOverride } : {}),
         ...(sessionContext ? { sessionContext } : {}),
         ...(turnContext.length > 0 && !isCompactCommand ? { turnContext: turnContext.join('\n\n') } : {}),
@@ -7547,7 +7583,7 @@ export class SessionManager implements ISessionManager {
     workspaceId: string,
     failureErrorCode?: string,
   ): boolean {
-    if (managed.authRetryAttempted || !managed.lastSentMessage) return false
+    if (managed.ultraTurnNoReplay || managed.authRetryAttempted || !managed.lastSentMessage) return false
 
     sessionLog.info(`Auth error detected, attempting token refresh and retry for session ${sessionId}`)
     managed.authRetryAttempted = true
@@ -9859,6 +9895,7 @@ export class SessionManager implements ISessionManager {
         }, workspaceId)
 
         if (!managed) break
+        if (managed.ultraTurnNoReplay) break
         this.noteSuggestionUse(managed, { activatedSource: event.sourceSlug })
 
         // The captured original message can be empty — an empty/attachment-only turn,

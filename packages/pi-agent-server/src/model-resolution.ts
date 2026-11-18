@@ -25,6 +25,13 @@ export function resolvePiModel(
   // Strip Craft's pi/ prefix — Pi SDK uses bare model IDs (e.g. "claude-sonnet-4-6")
   const bareId = modelId.startsWith('pi/') ? modelId.slice(3) : modelId;
 
+  if (bareId === 'gpt-6.2-sol-ultrafast') {
+    if (piAuthProvider !== 'openai-codex' || preferCustomEndpoint) throw new Error('Ultrafast requires native Codex OAuth');
+    const sol = modelRegistry.find('openai-codex', 'gpt-6.2-sol');
+    if (!sol) throw new Error('Sol unavailable');
+    return sol;
+  }
+
   // Custom-endpoint takes precedence when configured
   if (preferCustomEndpoint) {
     const custom = modelRegistry.find('custom-endpoint', bareId);

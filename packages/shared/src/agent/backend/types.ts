@@ -209,6 +209,7 @@ export interface CoreBackendConfig {
   poolServerUrl?: string;
 
   /** Callback when SDK session ID is captured/updated */
+  authorizeUltra?: (nonce: string, proof: string) => Promise<boolean>;
   onSdkSessionIdUpdate?: (sdkSessionId: string) => void;
 
   /** Callback when SDK session ID is cleared (e.g., after failed resume) */
@@ -288,6 +289,8 @@ export interface CoreBackendConfig {
  * Options for the chat method.
  */
 export interface ChatOptions {
+  /** Internal volatile consent captured at submission, never a renderer option. */
+  ultraNonce?: string;
   /** Retry flag (internal use for session recovery) */
   isRetry?: boolean;
   /** Override thinking level for this message only */

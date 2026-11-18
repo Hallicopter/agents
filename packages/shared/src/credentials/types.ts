@@ -91,6 +91,8 @@ export interface CredentialId {
  * which don't have a clientId.
  */
 export interface StoredCredential {
+  /** Non-secret identity for this OAuth write, absent for legacy records. */
+  revision?: string;
   /** The secret value (API key, access token, or primary credential) */
   value: string;
   /** OAuth refresh token */

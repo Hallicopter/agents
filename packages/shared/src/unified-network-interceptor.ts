@@ -2181,6 +2181,29 @@ async function interceptedFetch(
 
   // Find matching adapter for this URL
   const adapter = findAdapter(url);
+  // An explicitly routed native Sol request must never take the raw fallback:
+  // the transformed POST may already have reached the provider. Fail closed
+  // even on preparation errors, rather than skipping validation or transforms.
+  const strictSol = url === 'https://chatgpt.com/backend-api/codex/responses' &&
+    new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+      .get('x-codex-routing-hint') === 'model=gpt-6.2-sol;tier=ultrafast';
+  if (strictSol) {
+    if (adapter?.name !== 'openai-responses' || init?.method !== 'POST') {
+      throw new Error('Cannot validate this Ultrafast request; no request sent');
+    }
+    const headers = new Headers(init.headers);
+    // Native Pi SSE may encode even small JSON requests as zstd bytes. Feed
+    // plain JSON through the same adapter; never pass encoded bytes around it.
+    if (headers.get('content-encoding') === 'zstd' && init.body instanceof Uint8Array) {
+      const { zstdDecompressSync } = await import('node:zlib');
+      const body = zstdDecompressSync(init.body, { maxOutputLength: 64 * 1024 * 1024 }).toString('utf8');
+      headers.delete('content-encoding');
+      headers.delete('content-length');
+      init = { ...init, headers, body };
+    } else if (typeof init.body !== 'string' || headers.has('content-encoding')) {
+      throw new Error('Unsupported Ultrafast request encoding; no request sent');
+    }
+  }
 
   if (
     adapter &&
@@ -2229,6 +2252,16 @@ async function interceptedFetch(
           ...(proxy ? { proxy } : {}),
         };
 
+        if (strictSol) {
+          if (parsed.model !== 'gpt-6.2-sol' || parsed.service_tier !== 'ultrafast') {
+            throw new Error('Ultrafast routing does not match payload; no request sent');
+          }
+          const check = (globalThis as { craftCheckUltra?: (headers: Headers) => Promise<void> }).craftCheckUltra;
+          if (!check) throw new Error('Ultrafast dispatch check unavailable');
+          await check(new Headers(finalInit.headers));
+          finalInit.redirect = 'error';
+        }
+
         // Cache a sanitized request summary for the 400-empty-body diagnostic
         // pathway in captureApiError. Plain-text bodies (sensitive arguments)
         // never leave this process.
@@ -2265,11 +2298,13 @@ async function interceptedFetch(
         return logResponse(response, url, startTime, adapter);
       }
     } catch (e) {
+      if (strictSol) throw e;
       debugLog(`[${adapter?.name}] FETCH modification failed:`, e);
     }
   }
 
   const proxy = getProxyForUrl(url);
+  if (strictSol) throw new Error('Missing Ultrafast payload; no request sent');
   const proxyInit = proxy ? { ...init, proxy } : init;
   const response = await originalFetch(input, proxyInit);
   return logResponse(response, url, startTime);
@@ -2293,5 +2328,6 @@ const fetchProxy = new Proxy(interceptedFetch, {
 // Auto-install in runtime subprocesses. Tests can disable this side effect.
 if (process.env.CRAFT_INTERCEPTOR_DISABLE_AUTO_INSTALL !== '1') {
   (globalThis as unknown as { fetch: unknown }).fetch = fetchProxy;
+  Object.assign(globalThis, { craftInterceptedFetch: fetchProxy });
   debugLog('Unified fetch interceptor installed');
 }

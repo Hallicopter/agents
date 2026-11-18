@@ -68,6 +68,7 @@ import { resolvePiModel, isDeniedMiniModelId } from './model-resolution.ts';
 import { pickProviderAppropriateMiniModel } from './pick-mini-model.ts';
 import { queryMiniModel } from './mini-model-query.ts';
 import { registerTerraModel, requiresExactModel, verifyTerraResponse } from './terra-model.ts';
+import { installUltraCheck, withUltraPrompt, finishUltraCheck, type UltraCheck } from './ultrafast.ts';
 import { registerOpenAI62Models } from './openai-62-models.ts';
 import {
   CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS,
@@ -161,7 +162,8 @@ interface RuntimeConfigUpdateMessage {
 /** Messages from main process (stdin) */
 type InboundMessage =
   | InitMessage
-  | { type: 'prompt'; id: string; message: string; systemPrompt: string; images?: Array<{ type: 'image'; data: string; mimeType: string }> }
+  | { type: 'ultra_result'; id: string; allowed: boolean }
+  | { type: 'prompt'; ultraNonce?: string; id: string; message: string; systemPrompt: string; images?: Array<{ type: 'image'; data: string; mimeType: string }> }
   /** The whole proxy tool set: it replaces the previous one. */
   | { type: 'register_tools'; tools: ProxyToolDef[] }
   | { type: 'tool_execute_response'; requestId: string; result: { content: string; isError: boolean } }
@@ -251,6 +253,7 @@ interface OutboundSessionIdUpdate { type: 'session_id_update'; sessionId: string
 interface OutboundError { type: 'error'; message: string; code?: string; id?: string }
 
 type OutboundMessage =
+  | UltraCheck
   | OutboundReady
   | OutboundEvent
   | OutboundPreToolUseReq
@@ -1494,10 +1497,37 @@ async function handlePrompt(msg: Extract<InboundMessage, { type: 'prompt' }>): P
 
     // Fire prompt — use followUp when session is already streaming so the
     // message is queued instead of throwing "Agent is already processing".
-    await session.prompt(msg.message, {
+    const prompt = () => session.prompt(msg.message, {
       images: msg.images && msg.images.length > 0 ? msg.images : undefined,
       streamingBehavior: 'followUp',
     });
+    if (msg.ultraNonce !== undefined) {
+      if (session.isStreaming || session.isCompacting || initConfig?.authType !== 'oauth' || initConfig.piAuth?.provider !== 'openai-codex' || initConfig.baseUrl || initConfig.customEndpoint || globalThis.fetch !== (globalThis as { craftInterceptedFetch?: unknown }).craftInterceptedFetch) throw new Error('Cannot safely start Ultrafast');
+      const sol = piModelRegistry?.find('openai-codex', 'gpt-6.2-sol');
+      if (!sol) throw new Error('Sol unavailable');
+      await session.setModel(sol);
+      const original = session.agent.streamFunction;
+      const retry = session.autoRetryEnabled, compact = session.autoCompactionEnabled;
+      const warming = session.settingsManager.getCacheWarmingMode();
+      session.setCacheWarmingMode('off');
+      session.setAutoRetryEnabled(false);
+      session.setAutoCompactionEnabled(false);
+      session.agent.streamFunction = (model, context, options) => {
+        if (model.id !== sol.id || model.provider !== sol.provider || model.api !== 'openai-codex-responses' || model.baseUrl !== 'https://chatgpt.com/backend-api') throw new Error('Ultrafast model mismatch');
+        let dispatched = false;
+        return original(model, context, { ...options, fetch: Object.assign(async (...[url, init]: Parameters<typeof fetch>) => {
+          if (dispatched || String(url) !== 'https://chatgpt.com/backend-api/codex/responses' || init?.method !== 'POST' ||
+              new Headers(init.headers).get('x-codex-routing-hint') !== 'model=gpt-6.2-sol;tier=ultrafast') throw new Error('Unexpected Ultrafast dispatch');
+          dispatched = true;
+          return globalThis.fetch(url, init);
+        }, { preconnect: () => {} }), transport: 'sse', maxRetries: 0,
+          headers: { ...options?.headers, 'x-codex-routing-hint': 'model=gpt-6.2-sol;tier=ultrafast' },
+          onPayload: async (raw, m) => ({ ...((await options?.onPayload?.(raw,m) ?? raw) as object), service_tier: 'ultrafast' }),
+        });
+      };
+      try { await withUltraPrompt(msg.ultraNonce, prompt); }
+      finally { session.setCacheWarmingMode(warming); session.agent.streamFunction = original; session.setAutoRetryEnabled(retry); session.setAutoCompactionEnabled(compact); }
+    } else await prompt();
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
 
@@ -1927,6 +1957,10 @@ async function processMessage(msg: InboundMessage): Promise<void> {
       }
       break;
 
+    case 'ultra_result':
+      finishUltraCheck(msg.id, msg.allowed === true);
+      break;
+
     case 'token_update':
       if (moduleCredentialStore) {
         const piAuth = toPiAuth(msg.piAuth);
@@ -2004,4 +2038,5 @@ function main(): void {
   });
 }
 
+installUltraCheck(send);
 main();

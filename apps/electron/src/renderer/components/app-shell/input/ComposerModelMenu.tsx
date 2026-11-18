@@ -1,3 +1,4 @@
+import { pickerModels } from './ultrafast-picker'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, Check, ChevronDown, Image as ImageIcon } from 'lucide-react'
@@ -232,7 +233,7 @@ export function ComposerModelMenu({
                     {isAuthenticated && (
                       <StyledDropdownMenuSubContent className="min-w-[220px]">
                         {/* Show models for this connection - use provider-specific models as fallback */}
-                        {(conn.models || ANTHROPIC_MODELS).map((model) => {
+                        {pickerModels(conn.models || ANTHROPIC_MODELS, conn).map((model) => {
                           const modelId = typeof model === 'string' ? model : model.id
                           const modelName = typeof model === 'string'
                             ? stripPiPrefixForDisplay(getModelShortName(model))
@@ -291,7 +292,7 @@ export function ComposerModelMenu({
               </>
             )}
             {/* Model options based on effective connection's provider type */}
-            {availableModels.map((model) => {
+            {pickerModels(availableModels, effectiveConnectionDetails).map((model) => {
               const modelId = typeof model === 'string' ? model : model.id
               const modelName = typeof model === 'string'
                 ? stripPiPrefixForDisplay(getModelShortName(model))

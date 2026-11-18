@@ -1,3 +1,4 @@
+import { pickerModels } from './ultrafast-picker'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -290,7 +291,7 @@ export function CompactModelSelector({
                       </button>
                       {isAuthenticated && isExpanded && (
                         <div className="pl-6 flex flex-col gap-0.5">
-                          {(conn.models || ANTHROPIC_MODELS).map(model => {
+                          {pickerModels(conn.models || ANTHROPIC_MODELS, conn).map(model => {
                             const modelId = typeof model === 'string' ? model : model.id
                             const modelName = typeof model === 'string'
                               ? stripPiPrefixForDisplay(getModelShortName(model))
@@ -341,7 +342,7 @@ export function CompactModelSelector({
             ))
           ) : (
             // 'flat' — list models of the active connection
-            availableModels.map(model => {
+            pickerModels(availableModels, effectiveConnectionDetails).map(model => {
               const modelId = typeof model === 'string' ? model : model.id
               const modelName = typeof model === 'string'
                 ? stripPiPrefixForDisplay(getModelShortName(model))

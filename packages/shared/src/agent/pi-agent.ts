@@ -968,6 +968,16 @@ export class PiAgent extends BaseAgent {
     }
 
     switch (type) {
+      case 'ultra_dispatch': {
+        const child = this.subprocess;
+        const { id, nonce, proof } = msg;
+        void (async () => {
+          let allowed = false;
+          try { allowed = typeof nonce === 'string' && typeof proof === 'string' && !!await this.config.authorizeUltra?.(nonce, proof); } catch { /* fail closed */ }
+          if (child === this.subprocess) this.send({ type: 'ultra_result', id, allowed });
+        })();
+        break;
+      }
       case 'ready':
         // Subprocess initialized, callback server listening
         this.callbackPort = (msg.callbackPort as number) || 0;
@@ -2126,6 +2136,7 @@ export class PiAgent extends BaseAgent {
         }
       }
 
+      if (compactMatch && options?.ultraNonce) throw new Error('Select Standard before manual compaction');
       if (compactMatch) {
         if (compactEpoch !== this.compactionEpoch) throw new Error('Compaction aborted');
         const customInstructions = compactMatch[1]?.trim() || undefined;
@@ -2257,6 +2268,7 @@ export class PiAgent extends BaseAgent {
       const turnId = `turn-${++this.rpcIdCounter}`;
       this.send({
         type: 'prompt',
+        ultraNonce: options?.ultraNonce ?? (this.getModel() === 'pi/gpt-6.2-sol-ultrafast' ? 'unselected' : undefined),
         id: turnId,
         message: userMessage,
         systemPrompt: fullSystemPrompt,

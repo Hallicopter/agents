@@ -137,7 +137,7 @@ export interface ISessionManager {
     reconcile?: { name?: string; projectId?: string; workingDirectory?: string; model?: string; llmConnection?: string; permissionMode?: PermissionMode },
   ): Promise<boolean>
   setSessionConnection(sessionId: string, connectionSlug: string): Promise<void>
-  updateSessionModel(sessionId: string, workspaceId: string, model: string | null, connection?: string): Promise<void>
+  updateSessionModel(sessionId: string, workspaceId: string, model: string | null, connection?: string, picker?: boolean): Promise<void>
 
   // ---------------------------------------------------------------------------
   // Messaging

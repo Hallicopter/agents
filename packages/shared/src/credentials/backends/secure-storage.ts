@@ -41,6 +41,8 @@ import type { CredentialId, StoredCredential } from '../types.ts';
 import { credentialIdToAccount, accountToCredentialId } from '../types.ts';
 import { CONFIG_DIR, DEFAULT_CONFIG_DIR_NAME } from '../../config/paths.ts';
 
+import { replaceOAuthRevision } from '../oauth-revision.ts';
+
 // File location
 const CREDENTIALS_FILE = join(CONFIG_DIR, 'credentials.enc');
 
@@ -160,7 +162,8 @@ export class SecureStorageBackend implements CredentialBackend {
     }
 
     const key = credentialIdToAccount(id);
-    store.credentials[key] = credential;
+    store.credentials[key] = id.type === 'llm_oauth' && id.connectionSlug
+      ? { ...credential, revision: replaceOAuthRevision(id.connectionSlug) } : credential;
     store.metadata.updatedAt = Date.now();
 
     await this.saveStore(store);
@@ -171,6 +174,7 @@ export class SecureStorageBackend implements CredentialBackend {
   }
 
   deleteSync(id: CredentialId): boolean {
+    if (id.type === 'llm_oauth' && id.connectionSlug) replaceOAuthRevision(id.connectionSlug);
     const store = this.loadStoreSync();
     if (!store) return false;
 
@@ -210,11 +214,18 @@ export class SecureStorageBackend implements CredentialBackend {
     return this.loadStoreSync();
   }
 
-  private loadStoreSync(): CredentialStore | null {
+  /** A premium picker reads the current record, not a long-lived process cache.
+   * Never repair/delete a store observed mid-write by another process. */
+  static readOAuthSnapshot(slug: string): StoredCredential | undefined {
+    const store = new SecureStorageBackend().loadStoreSync(true);
+    return store?.credentials[credentialIdToAccount({ type: 'llm_oauth', connectionSlug: slug })];
+  }
+
+  private loadStoreSync(readOnly = false): CredentialStore | null {
     // Return cached store if available
     if (this.cachedStore) return this.cachedStore;
 
-    migrateCredentialsIfNeeded();
+    if (!readOnly) migrateCredentialsIfNeeded();
 
     if (!existsSync(CREDENTIALS_FILE)) return null;
 
@@ -228,13 +239,13 @@ export class SecureStorageBackend implements CredentialBackend {
     // Validate minimum size
     if (fileData.length < HEADER_SIZE + IV_SIZE + AUTH_TAG_SIZE) {
       // File is corrupted, delete and return null
-      this.handleCorruptedFile();
+      if (!readOnly) this.handleCorruptedFile();
       return null;
     }
 
     // Validate magic bytes
     if (!fileData.subarray(0, MAGIC_SIZE).equals(MAGIC_BYTES)) {
-      this.handleCorruptedFile();
+      if (!readOnly) this.handleCorruptedFile();
       return null;
     }
 
@@ -263,12 +274,12 @@ export class SecureStorageBackend implements CredentialBackend {
     if (store) {
       // Migration: re-save with new stable key so future loads use hardware UUID
       this.cachedStore = store;
-      this.saveStoreSync(store);
+      if (!readOnly) this.saveStoreSync(store);
       return store;
     }
 
     // Both keys failed - file is truly corrupted
-    this.handleCorruptedFile();
+    if (!readOnly) this.handleCorruptedFile();
     return null;
   }
 

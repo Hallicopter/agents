@@ -26,3 +26,6 @@ export { CredentialManager, getCredentialManager } from './manager.ts';
 export type { CredentialId, CredentialType, StoredCredential } from './types.ts';
 export { credentialIdToAccount, accountToCredentialId, SOURCE_CREDENTIAL_TYPES } from './types.ts';
 export type { CredentialBackend } from './backends/types.ts';
+export { currentOAuthRevision } from './oauth-revision.ts';
+export { selectGrant, allowsDispatch, type SelectedGrant } from './ultrafast-grant.ts';
+export { SecureStorageBackend } from './backends/secure-storage.ts';

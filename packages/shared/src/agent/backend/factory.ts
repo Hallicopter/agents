@@ -629,6 +629,10 @@ export function resolveModelForProvider(
   managedModel: string | undefined,
   connection: LlmConnection | null
 ): string {
+  if (managedModel === 'pi/gpt-6.2-sol-ultrafast') {
+    if (provider !== 'pi' || connection?.providerType !== 'pi' || connection.authType !== 'oauth' || connection.piAuthProvider !== 'openai-codex' || connection.baseUrl || connection.customEndpoint) throw new Error('Ultrafast requires native Codex OAuth');
+    return managedModel;
+  }
   // Cross-provider guard: if the model belongs to a different provider, fall back
   // to the connection's default. This prevents e.g. sending a Claude model to Pi.
   if (managedModel) {
