@@ -81,3 +81,11 @@ describe('handleTextComplete messageId synchronization', () => {
     expect(id).not.toBe('')
   })
 })
+
+it('empty final uses a same-turn continuation but not an unrelated stream',()=>{
+  const session={messages:[{role:'assistant',content:'prefix',turnId:'t',isStreaming:true}]} as any
+  for(const [turnId, expected] of [['t','prefix plus'],['other','prefix']]) {
+    const result=handleTextComplete({session,streaming:{turnId,content:'prefix plus'}},{type:'text_complete',sessionId:'s',turnId:'t',text:''})
+    expect(result.session.messages[0].content).toBe(expected)
+  }
+})

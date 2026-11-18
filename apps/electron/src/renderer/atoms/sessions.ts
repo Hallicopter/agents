@@ -494,7 +494,9 @@ export const addSessionAtom = atom(
 export const removeSessionAtom = atom(
   null,
   (get, set, sessionId: string) => {
-    forgetHistory(sessionId)
+    forgetHistory(sessionId,get(windowWorkspaceIdAtom) ?? undefined)
+    const permissions = new Map(get(pendingPermissionsAtom))
+    if (permissions.delete(sessionId)) set(pendingPermissionsAtom, permissions)
     sessionLoadingPromises.delete(sessionId)
     setCursor(get, set, sessionId)
     // Clear session atom value first
@@ -652,7 +654,7 @@ async function loadSessionMessages(
     const api = window.electronAPI
     let page: import('@craft-agent/shared/protocol').SessionHistoryWindow | undefined
     if (typeof api.getSessionHistoryWindow === 'function' && api.isChannelAvailable?.('sessions:historyWindow')) {
-      try { page = await readWindow(api,sessionId,undefined,[...new Set([...unknownDeliveries(workspace ?? "",sessionId), ...(beforeLoad?.messages.filter(m=>m.role==='user' && m.isPending) ?? [])].map(m=>m.id))].slice(0,256)) }
+      try { page = await readWindow(api,sessionId,undefined,[...new Set([...unknownDeliveries(workspace ?? "",sessionId), ...(beforeLoad?.messages.filter(m=>m.role==='user' && (m.isPending || m.isQueued)) ?? [])].map(m=>m.id))].slice(0,256)) }
       catch (error) {
         // Old servers without a channel list optimistically report availability.
         if ((error as {code?:string}).code !== 'CHANNEL_NOT_FOUND') throw error
@@ -764,6 +766,9 @@ async function loadSessionMessages(
 
   try {
     return await loadPromise
+  } catch (error) {
+    if (sessionLoadingPromises.get(sessionId) !== loadPromise || workspace !== get(windowWorkspaceIdAtom)) return null
+    throw error
   } finally {
     endHistory(sessionId,events)
     if (sessionLoadingPromises.get(sessionId) === loadPromise) sessionLoadingPromises.delete(sessionId)

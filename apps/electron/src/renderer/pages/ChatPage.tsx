@@ -18,6 +18,7 @@ import { rendererPerf } from '@/lib/perf'
 import { isAbsolutePath } from '@/lib/drafts'
 import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
+import { discardUnknown, unknownDeliveries, subscribeDelivery } from '@/atoms/history-replay'
 import { loadOlderHistoryAtom, historyCoverageAtom, ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
 import { usePrWatch } from '@/hooks/usePrWatch'
@@ -77,6 +78,11 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   // Use per-session atom for isolated updates
   const session = useSessionData(sessionId)
+
+  const deliveryScope = session?.workspaceId ?? activeWorkspaceId ?? ''
+  const [,refreshDelivery] = React.useReducer((v:number)=>v+1,0)
+  React.useLayoutEffect(()=>subscribeDelivery(deliveryScope,sessionId,refreshDelivery),[deliveryScope,sessionId])
+  const uncertain = unknownDeliveries(deliveryScope,sessionId)
 
   // Track if messages are loaded for this session (for lazy loading)
   const loadedSessions = useAtomValue(loadedSessionsAtom)
@@ -529,6 +535,14 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         onSetPrAutoFix={prWatch.setAutoFix}
         onPrCardOpenChange={prWatch.onCardOpenChange}
       />
+      {uncertain.length > 0 && <aside aria-label="Delivery not confirmed" className="max-h-36 overflow-auto px-4 py-2 text-sm">
+        <strong>Delivery not confirmed</strong><p>These messages may have been received. They have not been resent.</p>
+        {uncertain.map(m => <details key={m.id}><summary>{m.content.slice(0,80) || 'Message with attachments'}</summary>
+          <pre className="whitespace-pre-wrap select-text">{m.content}</pre>
+          {m.attachments?.map(a => <div key={a.id}>{a.name} <code className="select-text">{a.storedPath}</code></div>)}
+          <button className="underline" onClick={()=>discardUnknown(deliveryScope,sessionId,m.id)}>Discard this local copy</button>
+        </details>)}
+      </aside>}
       {partial && <div role="status" className="px-4 py-1 text-xs text-muted-foreground">
         Showing recent messages. Search and jumps cover loaded history only.{' '}
         <button className="underline" onClick={() => loadOlder(sessionId).catch((e: Error) => toast.error(e.message))}>Load older messages</button>{' · '}

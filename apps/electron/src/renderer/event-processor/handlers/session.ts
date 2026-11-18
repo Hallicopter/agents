@@ -348,11 +348,23 @@ export function handleInterrupted(
   // Clear transient streaming state (isPending, isStreaming) and mark running tools as interrupted
   // These fields are not persisted, so this matches the state after a reload
   // Also filter out status messages - they are transient UI state that shouldn't persist after interruption
+  const cancelled = new Set(isUserInitiated ? event.cancelledIds : [])
+  const unmatched = [...(isUserInitiated ? event.queuedMessages ?? [] : [])]
+  for (const m of session.messages) if (cancelled.has(m.id)) {
+    const i = unmatched.indexOf(m.content)
+    if (i >= 0) unmatched.splice(i, 1)
+  }
+  // Legacy queue entries lack IDs. Match only unambiguous multiplicities;
+  // equal text alone cannot distinguish a later, unrelated submission.
+  for (const text of new Set(cancelled.size < (event.queuedMessages?.length ?? 0) ? unmatched : [])) {
+    const matches = session.messages.filter(m => m.role === 'user' && m.isQueued && !cancelled.has(m.id) && m.content === text)
+    if (matches.length === unmatched.filter(t => t === text).length) for (const m of matches) cancelled.add(m.id)
+  }
   const updatedMessages = session.messages
     .filter(m => m.role !== 'status')  // Remove transient status messages
     // Only drop queued bubbles when the user explicitly stopped — silent
     // redirects auto-replay them so they must remain visible (#616).
-    .filter(m => event.cancelledIds ? !event.cancelledIds.includes(m.id) : !(isUserInitiated && m.isQueued))
+    .filter(m => !cancelled.has(m.id))
     .map(m => {
       // Mark running tools as interrupted
       if (m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error') {

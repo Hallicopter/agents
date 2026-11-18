@@ -7459,6 +7459,15 @@ export class SessionManager implements ISessionManager {
       managed.messageQueue.map(q => q.messageId).filter((id): id is string => !!id)
     )
 
+    // Recover IDs for legacy entries only when the remaining queued bubbles
+    // uniquely account for every occurrence. Never tombstone a guess.
+    const legacy = managed.messageQueue.filter(q => !q.messageId).map(q => q.message)
+    for (const text of new Set(legacy)) {
+      const candidates = managed.messages.filter(m => m.role === 'user' && m.isQueued && !queuedMessageIds.has(m.id) && m.content === text)
+      if (candidates.length === legacy.filter(t => t === text).length) {
+        for (const m of candidates) queuedMessageIds.add(m.id)
+      }
+    }
     // Clear queue - user explicitly stopped, don't process queued messages
     managed.messageQueue = []
 
@@ -10035,6 +10044,9 @@ export class SessionManager implements ISessionManager {
       return
     }
 
+    if (event.type === 'complete' || event.type === 'error' || event.type === 'interrupted') {
+      this.flushDelta(event.sessionId, workspaceId)
+    }
     if (event.type === 'permission_request') {
       const entry = this.pendingPermissionRequests.get(event.request.requestId)
       if (entry) entry.prompt = event.request

@@ -59,6 +59,13 @@ describe('processing lifecycle → Telegram progress', () => {
     .filter(e => e.type === 'processing_changed')
     .map(e => e.isProcessing)
 
+  it('publishes the pending delta before an interruption and retires its timer', () => {
+    ;(sm as any).queueDelta(managed.id,'ws','prefix','turn')
+    ;(sm as any).sendEvent({type:'interrupted',sessionId:managed.id},'ws')
+    expect(events.map(e=>[e.type,('historySeq' in e ? e.historySeq : undefined)])).toEqual([['text_delta',1],['interrupted',2]])
+    expect((sm as any).pendingDeltas.size).toBe(0)
+    expect((sm as any).deltaFlushTimers.size).toBe(0)
+  })
   function silentAgent() {
     const started = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
     const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]

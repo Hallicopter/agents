@@ -129,7 +129,8 @@ export function handleTextComplete(
     const existingMsg = session.messages[msgIndex]
     // Fallback chain: SDK event text → accumulated streaming content → existing message content.
     // Guards against SDK quirks or race conditions where event.text arrives empty.
-    const resolvedContent = event.text || existingMsg?.content || streaming?.content || ''
+    const resolvedContent = event.text || (streaming?.turnId === event.turnId && streaming?.content.startsWith(existingMsg.content)
+      ? streaming.content : existingMsg.content)
     const updatedSession = updateMessageAt(session, msgIndex, {
       // Replace temporary renderer-generated ID with authoritative main-process ID
       // so branchFromMessageId always resolves against persisted session.jsonl.

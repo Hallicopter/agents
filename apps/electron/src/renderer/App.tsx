@@ -1,3 +1,5 @@
+import { restoreEditors } from './lib/restore-editor'
+import { panelStackAtom, parseSessionIdFromRoute } from './atoms/panel-stack'
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from '@/hooks/useTheme'
@@ -833,10 +835,7 @@ function MainApp() {
             // The editor may be ahead of the debounced draft cache. Let the
             // matching mounted editor merge and publish before using the cache.
             const text = coerceInputText(effect.text)
-            const request = new CustomEvent('craft:restore-input', {
-              cancelable: true, detail: { sessionId, text },
-            })
-            if (window.dispatchEvent(request)) {
+            if (!restoreEditors(sessionId, text)) {
               const current = coerceInputText(sessionDraftsRef.current.get(sessionId)?.text)
               const restored = current ? `${current}\n\n${text}` : text
               handleInputChange(sessionId, restored)
@@ -940,6 +939,8 @@ function MainApp() {
       if (event.type === 'session_deleted') {
         inventory.current?.deleted.add(sessionId)
         removeSession(sessionId)
+        store.set(panelStackAtom, panels => panels.map(panel => parseSessionIdFromRoute(panel.route) === sessionId
+          ? { ...panel, route: routes.view.allSessions() } : panel))
         return
       }
 

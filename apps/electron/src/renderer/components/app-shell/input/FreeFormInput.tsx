@@ -1,3 +1,4 @@
+import { registerEditor } from '@/lib/restore-editor'
 import * as React from 'react'
 import { useTranslation } from "react-i18next"
 import { toast } from 'sonner'
@@ -576,20 +577,22 @@ export function FreeFormInput({
   inputRef.current = input // Keep ref in sync with state
 
   React.useLayoutEffect(() => {
-    const restore = (event: Event) => {
-      const { sessionId: target, text } = (event as CustomEvent).detail ?? {}
-      if (!sessionId || target !== sessionId || !onInputChange || event.defaultPrevented) return
-      event.preventDefault() // claim the merge; App must not also publish it
-      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current)
-      syncTimeoutRef.current = null
-      const current = inputRef.current
-      const merged = current ? `${current}\n\n${text}` : text
-      inputRef.current = prevInputValueRef.current = merged
-      setInput(merged)
-      onInputChange(merged)
-    }
-    window.addEventListener('craft:restore-input', restore)
-    return () => window.removeEventListener('craft:restore-input', restore)
+    if (!sessionId || !onInputChange) return
+    return registerEditor(sessionId, {
+      snapshot: () => ({ text: inputRef.current, attachments: attachmentsRef.current }),
+      install: ({ text, attachments: restored }) => {
+        if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current)
+        syncTimeoutRef.current = null
+        inputRef.current = prevInputValueRef.current = text
+        setInput(text)
+        onInputChange(text)
+        // Propagate the union to each panel and its attachment persistence path.
+        skipPersistRef.current = true
+        attachmentsRef.current = restored
+        onAttachmentsChangeRef.current?.(restored)
+        setAttachments(restored)
+      },
+    })
   }, [sessionId, onInputChange])
 
   React.useEffect(() => {

@@ -35,3 +35,22 @@ it('after a replay gap a cancelled submission cannot reappear, while its identic
  const ack=event('user_message',91,{message:user('in-flight'),status:'accepted'});reconcileDelivery('other','s',ack);expect(unknownDeliveries('w','s')).toHaveLength(1);reconcileDelivery('w','s',ack);expect(unknownDeliveries('w','s')).toEqual([])
  for(const e of [event('interrupted',89,{queuedMessages:['identical']}),event('complete',90,{})]){expect(observeHistory('s',e)).toBe(false);expect(claimHistoryEffect('w',e)).toBe(true);expect(claimHistoryEffect('w',e)).toBe(false)}
 })
+
+import {removeSessionAtom,historyCoverageAtom} from '../sessions'
+import {rebaseHistory} from '../history-replay'
+it('delete supersedes a failed window request without installing a ghost or surfacing an error',async()=>{
+ const store=createStore();store.set(windowWorkspaceIdAtom,'w');store.set(sessionAtomFamily('s'),{...metadata,messages:[]} as any)
+ const request=Promise.withResolvers<any>();globalThis.window={electronAPI:{isChannelAvailable:()=>true,getSessionHistoryWindow:()=>request.promise}} as any
+ const load=store.set(forceSessionMessagesReloadAtom,'s');observeHistory('s',{type:'session_deleted',sessionId:'s'});store.set(removeSessionAtom,'s');request.reject(Error('gone'))
+ expect(await load).toBeNull();expect(store.get(sessionAtomFamily('s'))).toBeNull();expect(store.get(historyCoverageAtom).has('s')).toBe(false)
+})
+it('compacts claims, rejects old-epoch duplicates and keeps unresolved content through scope reset',()=>{
+ const page=(epoch:string)=>({metadata:{...metadata,id:'bounded'},epoch,messages:[],watermark:0}) as any
+ rebaseHistory(page('first'),[],{...metadata,id:'bounded',messages:[user('recover',true)]} as any)
+ const frame=(epoch:string,n:number)=>({...event('complete',n,{}),sessionId:'bounded',historyEpoch:epoch})
+ for(let n=1;n<=1024;n++)expect(claimHistoryEffect('w',frame('first',n))).toBe(true)
+ expect(claimHistoryEffect('w',frame('first',1))).toBe(false)
+ rebaseHistory(page('second'),[],null);expect(claimHistoryEffect('w',frame('first',1))).toBe(false);expect(claimHistoryEffect('w',frame('second',1))).toBe(true)
+ forgetHistory();expect(claimHistoryEffect('w',frame('second',1))).toBe(false);expect(unknownDeliveries('w','bounded').map(m=>m.id)).toEqual(['recover']);expect(unknownDeliveries('other','bounded')).toEqual([])
+ forgetHistory('bounded','w');expect(unknownDeliveries('w','bounded')).toEqual([])
+})

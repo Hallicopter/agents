@@ -320,6 +320,18 @@ describe('mid-stream queue runtime invariants', () => {
     managed.isProcessing = false // Disarm the production Stop backstop timer.
   })
 
+  it('hard Stop reconciles mixed legacy and keyed entries without dropping unrelated queued work',async()=>{
+    const managed=buildSession('mixed');managed.isProcessing=true
+    managed.messages=['a','b','unrelated'].map(id=>({id,role:'user',content:id,isQueued:true,timestamp:1}))
+    managed.messageQueue=[{message:'a',messageId:'a'},{message:'b'}]
+    managed.agent={forceAbort:()=>{}} as any
+    ;(sm as any).persistSession=()=>{}
+    const events:any[]=[];sm.setEventSink((_ch,_to,event)=>events.push(event))
+    await sm.cancelProcessing(managed.id)
+    expect(events.find(e=>e.type==='interrupted').cancelledIds).toEqual(['a','b'])
+    expect(managed.messages.filter(m=>m.role==='user').map(m=>m.id)).toEqual(['unrelated'])
+    managed.isProcessing=false
+  })
   it('re-stamps replay after the prior final response and emits that timestamp', async () => {
     const sessionId = 'queue-ordering'
     const managed = buildSession(sessionId)

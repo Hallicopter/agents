@@ -122,3 +122,9 @@ describe('handleInterrupted (#616)', () => {
     expect(ids).toContain('msg-1')
   })
 })
+
+for (const ids of [undefined, [], ['a']]) it(`legacy Stop restores only matching queued work (ids ${JSON.stringify(ids)})`, () => {
+  const state=makeState(['a','b','unrelated'].map(id=>({id,role:'user',isQueued:true,content:id})))
+  const result=handleInterrupted(state,{type:'interrupted',sessionId:'s',queuedMessages:['a','b'],cancelledIds:ids as string[] | undefined,message:{id:'stop'} as any})
+  expect(result.state.session.messages.map(m=>m.id)).toEqual(['unrelated','stop'])
+})
