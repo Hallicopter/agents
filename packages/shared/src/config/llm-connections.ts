@@ -241,6 +241,26 @@ export interface LlmConnectionWithStatus extends LlmConnection {
 // Helpers
 // ============================================================
 
+/** Presentation-only session choice. Never register or persist it as a provider model. */
+export const ULTRAFAST_MODEL_ID = 'pi/gpt-6.2-sol-ultrafast';
+export function isUltrafastId(id: unknown): boolean {
+  return id === ULTRAFAST_MODEL_ID || id === 'gpt-6.2-sol-ultrafast';
+}
+export function withoutUltrafast<T extends string | ModelDefinition>(models: T[]): T[] {
+  const isAlias = (m: T) => isUltrafastId(typeof m === 'string' ? m : m.id);
+  return models.some(isAlias) ? models.filter(m => !isAlias(m)) : models;
+}
+export function sessionPickerModels(models: Array<string | ModelDefinition>, conn?: LlmConnectionWithStatus | null) {
+  const ordinary = withoutUltrafast(models);
+  if (!conn?.isAuthenticated || conn.providerType !== 'pi' || conn.authType !== 'oauth' ||
+      conn.piAuthProvider !== 'openai-codex' || conn.baseUrl || conn.customEndpoint) return ordinary;
+  const idx = ordinary.findIndex(m => (typeof m === 'string' ? m : m.id) === 'pi/gpt-6.2-sol');
+  if (idx < 0) return ordinary;
+  const row: ModelDefinition = { id: ULTRAFAST_MODEL_ID, provider: 'pi', name: 'GPT-6.2-SOUL Ultrafast',
+    shortName: 'Ultrafast', description: 'Requests the Ultrafast service tier', contextWindow: 500000, supportsThinking: true };
+  return [...ordinary.slice(0, idx + 1), row, ...ordinary.slice(idx + 1)];
+}
+
 /**
  * Returns true when `modelId` must NOT be used as the mini/summarization model
  * given the current auth flavor.
@@ -254,7 +274,7 @@ export interface LlmConnectionWithStatus extends LlmConnection {
  */
 export function isDeniedMiniModelId(modelId: string, piAuthProvider?: string): boolean {
   const bare = modelId.startsWith('pi/') ? modelId.slice(3) : modelId;
-  if (bare === 'codex-mini-latest') return true;
+  if (isUltrafastId(modelId) || bare === 'codex-mini-latest') return true;
   if (piAuthProvider === 'openai-codex' && bare.includes('codex-mini')) return true;
   return false;
 }
@@ -378,7 +398,10 @@ function findSmallModel(
 
   // Fallback: last allowed model in the list, otherwise final entry.
   const fallback = [...connection.models].reverse().find(isAllowedModel);
-  return fallback ? toId(fallback) : toId(connection.models[connection.models.length - 1]!);
+  if (fallback) return toId(fallback);
+  // Preserve the historic last-entry fallback, except for a session-only choice.
+  const lastOrdinary = withoutUltrafast(connection.models).at(-1);
+  return lastOrdinary ? toId(lastOrdinary) : undefined;
 }
 
 /**

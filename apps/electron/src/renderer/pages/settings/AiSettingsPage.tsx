@@ -1,3 +1,4 @@
+import { withoutUltrafast } from '@config/llm-connections'
 /**
  * AiSettingsPage
  *
@@ -102,7 +103,7 @@ function getModelOptionsForConnection(
 
   // If connection has explicit models, use those
   if (connection.models && connection.models.length > 0) {
-    return connection.models.map((m) => {
+    return withoutUltrafast(connection.models).map((m) => {
       if (typeof m === 'string') {
         return { value: m, label: getModelShortName(m), description: '' }
       }

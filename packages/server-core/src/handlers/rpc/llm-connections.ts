@@ -1,5 +1,5 @@
 import { RPC_CHANNELS, type LlmConnectionSetup } from '@craft-agent/shared/protocol'
-import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
+import { sessionPickerModels, withoutUltrafast, isUltrafastId, getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { setSetupDeferred } from '@craft-agent/shared/config/storage'
 import {
@@ -66,6 +66,8 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   // Unified handler for LLM connection setup
   server.handle(RPC_CHANNELS.settings.SETUP_LLM_CONNECTION, async (_ctx, setup: LlmConnectionSetup): Promise<{ success: boolean; error?: string }> => {
     try {
+      if (isUltrafastId(setup.defaultModel)) throw new Error('Ultrafast is a session-only choice')
+      if (setup.models) setup = { ...setup, models: withoutUltrafast(setup.models) }
       const manager = getCredentialManager()
 
       // Ensure connection exists in config
@@ -438,11 +440,13 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     return Promise.all(connections.map(async (conn): Promise<LlmConnectionWithStatus> => {
       // Check if credentials exist for this connection
       const hasCredentials = await credentialManager.hasLlmCredentials(conn.slug, conn.authType)
-      return {
+      const status = {
         ...conn,
         isAuthenticated: conn.authType === 'none' || hasCredentials,
         isDefault: conn.slug === defaultSlug,
       }
+      // Only decorate this outgoing DTO. Storage, LIST, GET and provider discovery stay ordinary.
+      return status.models ? { ...status, models: sessionPickerModels(status.models, status) } : status
     }))
   })
 
@@ -464,6 +468,9 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   // If connection.slug exists and is found, updates it; otherwise creates new
   server.handle(RPC_CHANNELS.llmConnections.SAVE, async (_ctx, connection: LlmConnection): Promise<{ success: boolean; error?: string }> => {
     try {
+      if (isUltrafastId(connection.defaultModel)) throw new Error('Ultrafast is a session-only choice')
+      // Old clients send the entire status-list row back when editing ordinary settings.
+      if (connection.models) connection = { ...connection, models: withoutUltrafast(connection.models) }
       // Check if this is an update or create
       const existing = getLlmConnection(connection.slug)
       if (existing) {
