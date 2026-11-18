@@ -1405,6 +1405,7 @@ const openAiResponsesAdapter: ApiAdapter = {
     const tools = body.tools as Array<{
       type?: string;
       name?: string;
+      strict?: boolean | null;
       parameters?: {
         type?: string;
         properties?: Record<string, unknown>;
@@ -1427,7 +1428,9 @@ const openAiResponsesAdapter: ApiAdapter = {
       const updatedSchema = injectMetadataIntoToolSchema(params);
       params.properties = updatedSchema.properties;
       params.required = updatedSchema.required;
-      if ((params as Record<string, unknown>).additionalProperties === false) {
+      // Strict Responses tools must keep the SDK-normalized closed object.
+      // Both injected fields are already declared and required above.
+      if (tool.strict !== true && (params as Record<string, unknown>).additionalProperties === false) {
         delete (params as Record<string, unknown>).additionalProperties;
       }
       modifiedCount++;

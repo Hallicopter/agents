@@ -256,7 +256,7 @@ export function sessionPickerModels(models: Array<string | ModelDefinition>, con
       conn.piAuthProvider !== 'openai-codex' || conn.baseUrl || conn.customEndpoint) return ordinary;
   const idx = ordinary.findIndex(m => (typeof m === 'string' ? m : m.id) === 'pi/gpt-6.2-sol');
   if (idx < 0) return ordinary;
-  const row: ModelDefinition = { id: ULTRAFAST_MODEL_ID, provider: 'pi', name: 'GPT-6.2-SOUL Ultrafast',
+  const row: ModelDefinition = { id: ULTRAFAST_MODEL_ID, provider: 'pi', name: 'GPT-6.2 Sol Ultrafast',
     shortName: 'Ultrafast', description: 'Requests the Ultrafast service tier', contextWindow: 500000, supportsThinking: true };
   return [...ordinary.slice(0, idx + 1), row, ...ordinary.slice(idx + 1)];
 }

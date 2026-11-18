@@ -74,7 +74,7 @@ for (const rev of ['b1a5d0b3742aa35b8551fa828c92cab2d89692cd', 'd311e9de9ba7da08
     const tree = exports.ComposerModelMenu({ pickerMode, effectiveConnection: slug, llmConnections: [hydrated], availableModels: hydrated.models, connectionsByProvider: [['Pi', [hydrated]]], effectiveConnectionDetails: hydrated, contextDisplay: {}, contextLabels: {}, onModelChange })
     const rows: any[] = []
     function walk(node: any): void { if (Array.isArray(node)) return node.forEach(walk); if (node?.key === ultra) rows.push(node); if (node?.props) walk(node.props.children) }
-    walk(tree); assert.equal(rows.length, 1); assert(JSON.stringify(rows[0]).includes('GPT-6.2-SOUL Ultrafast'))
+    walk(tree); assert.equal(rows.length, 1); assert(JSON.stringify(rows[0]).includes('GPT-6.2 Sol Ultrafast'))
     assert.equal(session.ultraGrant, undefined); rows[0].props.onSelect(); await pending
     assert.deepEqual(calls.at(-1), ['s', 'w', ultra, slug]); assert.equal(session.ultraGrant?.slug, slug); assert.equal(session.model, ultra)
   }
