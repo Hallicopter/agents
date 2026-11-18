@@ -245,8 +245,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         inputValueRef.current = nextText
       }
     }
-    window.addEventListener('craft:restore-input', handler)
-    return () => window.removeEventListener('craft:restore-input', handler)
+    window.addEventListener('craft:cached-draft-restored', handler)
+    return () => window.removeEventListener('craft:cached-draft-restored', handler)
   }, [sessionId])
 
   const handleInputChange = React.useCallback((value: string) => {

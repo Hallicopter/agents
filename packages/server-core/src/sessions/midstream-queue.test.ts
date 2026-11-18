@@ -307,7 +307,12 @@ describe('mid-stream queue runtime invariants', () => {
     sm.setEventSink((_channel, _target, event) => events.push(event))
     await sm.cancelProcessing(managed.id)
     expect(forceAbort).toHaveBeenCalledTimes(1)
-    expect(events.find(e => e.type === 'interrupted').queuedMessages).toEqual(['pending'])
+    const interrupted = events.find(e => e.type === 'interrupted')
+    expect(interrupted.queuedMessages).toEqual(['pending'])
+    expect(interrupted.cancelledIds).toEqual(['a'])
+    expect(sm.captureHistory(managed.id, ['a', 'lost-ack'])?.submissionState).toEqual({
+      cancelled: ['a'], accepted: [],
+    })
     expect(managed.messages.some(m => m.id === 'a')).toBe(false)
     expect(managed.messageQueue).toEqual([])
     await (sm as any).processEvent(managed, { type: 'steer_undelivered', ...payload })

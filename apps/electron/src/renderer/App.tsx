@@ -830,20 +830,21 @@ function MainApp() {
             break
           }
           case 'restore_input': {
-            // Queued messages were removed from chat on abort — restore their text to the input field.
-            // Append to existing draft (user may have started typing) rather than overwrite.
-            const existingDraft = sessionDraftsRef.current.get(sessionId)
-            const existingText = coerceInputText(existingDraft?.text)
-            const restoredText = coerceInputText(effect.text)
-            const restored = existingText
-              ? `${existingText}\n\n${restoredText}`
-              : restoredText
-            handleInputChange(sessionId, restored)
-            // handleInputChange updates the ref but ChatPage has local state.
-            // Dispatch a custom event so ChatPage re-reads the draft.
-            window.dispatchEvent(new CustomEvent('craft:restore-input', {
-              detail: { sessionId, text: restored },
-            }))
+            // The editor may be ahead of the debounced draft cache. Let the
+            // matching mounted editor merge and publish before using the cache.
+            const text = coerceInputText(effect.text)
+            const request = new CustomEvent('craft:restore-input', {
+              cancelable: true, detail: { sessionId, text },
+            })
+            if (window.dispatchEvent(request)) {
+              const current = coerceInputText(sessionDraftsRef.current.get(sessionId)?.text)
+              const restored = current ? `${current}\n\n${text}` : text
+              handleInputChange(sessionId, restored)
+              // A structured approval UI can be mounted without a text editor.
+              window.dispatchEvent(new CustomEvent('craft:cached-draft-restored', {
+                detail: { sessionId, text: restored },
+              }))
+            }
             break
           }
           case 'toast_error': {

@@ -575,6 +575,23 @@ export function FreeFormInput({
   const inputRef = React.useRef(input)
   inputRef.current = input // Keep ref in sync with state
 
+  React.useLayoutEffect(() => {
+    const restore = (event: Event) => {
+      const { sessionId: target, text } = (event as CustomEvent).detail ?? {}
+      if (!sessionId || target !== sessionId || !onInputChange || event.defaultPrevented) return
+      event.preventDefault() // claim the merge; App must not also publish it
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current)
+      syncTimeoutRef.current = null
+      const current = inputRef.current
+      const merged = current ? `${current}\n\n${text}` : text
+      inputRef.current = prevInputValueRef.current = merged
+      setInput(merged)
+      onInputChange(merged)
+    }
+    window.addEventListener('craft:restore-input', restore)
+    return () => window.removeEventListener('craft:restore-input', restore)
+  }, [sessionId, onInputChange])
+
   React.useEffect(() => {
     return () => {
       // Cancel pending debounced sync

@@ -693,13 +693,14 @@ export class WsRpcServer implements RpcServer {
       webContentsId: client.webContentsId,
     }
 
+    let handlerTimeout: ReturnType<typeof setTimeout> | undefined
     try {
       const result = await Promise.race([
         handler(ctx, ...(args ?? [])),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Handler timeout: ${channel} (${WsRpcServer.HANDLER_TIMEOUT_MS}ms)`)),
-            WsRpcServer.HANDLER_TIMEOUT_MS),
-        ),
+        new Promise<never>((_, reject) => {
+          handlerTimeout = setTimeout(() => reject(new Error(`Handler timeout: ${channel} (${WsRpcServer.HANDLER_TIMEOUT_MS}ms)`)),
+            WsRpcServer.HANDLER_TIMEOUT_MS)
+        }),
       ])
       const response: MessageEnvelope = {
         id,
@@ -713,6 +714,8 @@ export class WsRpcServer implements RpcServer {
       const rawCode = (err as { code?: unknown } | null)?.code
       const code: ErrorCode = isErrorCode(rawCode) ? rawCode : 'HANDLER_ERROR'
       this.sendResponseError(client.ws, id, channel, code, message)
+    } finally {
+      clearTimeout(handlerTimeout)
     }
   }
 
