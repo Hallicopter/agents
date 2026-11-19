@@ -182,6 +182,19 @@ describe('Sonnet registry', () => {
   });
 });
 
+describe('Fable registry', () => {
+  it('lists Fable 5.2 without changing the Fable short-name lookup or removing older models', () => {
+    const models = ANTHROPIC_MODELS.filter(m => m.shortName === 'Fable');
+    expect(models.map(m => m.id)).toEqual(['claude-fable-5-1', 'claude-fable-5-2', 'claude-fable-5']);
+    expect(getModelIdByShortName('Fable')).toBe('claude-fable-5-1');
+    expect(getModelById('claude-fable-5-2')).toMatchObject({
+      name: 'Fable 5.2',
+      contextWindow: 1_000_000,
+      thinkingAlwaysOn: true,
+    });
+  });
+});
+
 describe('isAdaptiveThinkingAlwaysOnModel', () => {
   it('flags the registered always-on models in every id form', () => {
     for (const id of [

@@ -267,6 +267,7 @@ export const MODEL_REGISTRY: ModelDefinition[] = [
   {
     id: 'claude-fable-5-1',
     name: 'Fable 5.1',
+    // Keep the existing first-match short-name lookup pinned to Fable 5.1.
     shortName: 'Fable',
     description: 'Next-generation model for complex work',
     descriptionKey: 'model.fableDesc',
@@ -275,10 +276,18 @@ export const MODEL_REGISTRY: ModelDefinition[] = [
     thinkingAlwaysOn: true,
   },
   {
+    id: 'claude-fable-5-2',
+    name: 'Fable 5.2',
+    shortName: 'Fable',
+    description: 'For demanding reasoning and long-horizon agentic work',
+    descriptionKey: 'model.fableDesc',
+    provider: 'anthropic',
+    contextWindow: 1_000_000,
+    thinkingAlwaysOn: true,
+  },
+  {
     id: 'claude-fable-5',
     name: 'Fable 5',
-    // shortName intentionally collides with 5.1, which is listed first, so
-    // findModelIdByShortName('Fable') resolves to the newest Fable.
     shortName: 'Fable',
     description: 'Previous Fable generation',
     descriptionKey: 'model.fableDesc',
