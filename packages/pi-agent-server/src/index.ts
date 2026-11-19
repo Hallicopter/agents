@@ -107,6 +107,7 @@ import {
   createSystemPromptOverride,
   type SystemPromptOverride,
 } from './system-prompt-override.ts';
+import { createPuckAutoCompactionFocus } from './puck-auto-compaction-focus.ts';
 import { readContextUsage, deferContextUsage } from './context-usage.ts';
 import { waitForCompaction, MANUAL_COMPACT_WAIT_MS, PROMPT_COMPACT_WAIT_MS } from './compaction-wait.ts';
 import type { PiCompactResult, PiContextUsagePayload, PiLargeResultGateRequest, PiLargeResultGateResponse } from '../../shared/src/agent/backend/pi/protocol.ts';
@@ -163,7 +164,7 @@ interface RuntimeConfigUpdateMessage {
 type InboundMessage =
   | InitMessage
   | { type: 'ultra_result'; id: string; allowed: boolean }
-  | { type: 'prompt'; ultraNonce?: string; id: string; message: string; systemPrompt: string; images?: Array<{ type: 'image'; data: string; mimeType: string }> }
+  | { type: 'prompt'; autoCompactionFocus?: 'puck'; ultraNonce?: string; id: string; message: string; systemPrompt: string; images?: Array<{ type: 'image'; data: string; mimeType: string }> }
   /** The whole proxy tool set: it replaces the previous one. */
   | { type: 'register_tools'; tools: ProxyToolDef[] }
   | { type: 'tool_execute_response'; requestId: string; result: { content: string; isError: boolean } }
@@ -277,6 +278,7 @@ let piSession: AgentSession | null = null;
 // Forces Craft's system prompt onto piSession (see system-prompt-override.ts);
 // recreated together with the session.
 let piSessionPromptOverride: SystemPromptOverride | null = null;
+let piSessionCompactionFocus: ReturnType<typeof createPuckAutoCompactionFocus> | null = null;
 // A stop must also cancel a manual compact still waiting for auto-compaction.
 let compactionEpoch = 0;
 let piModelRegistry: PiModelRegistry | null = null;
@@ -782,11 +784,13 @@ async function ensureSession(): Promise<AgentSession> {
   // registered on the resource loader (see system-prompt-override.ts). The
   // loader otherwise mirrors the one createAgentSession would build itself.
   const systemPromptOverride = createSystemPromptOverride();
+  const compactionFocus = createPuckAutoCompactionFocus();
   sessionOptions.resourceLoader = await createCraftResourceLoader({
     cwd,
     agentDir,
     settingsManager,
     systemPromptOverride,
+    extraExtensions: [compactionFocus.extension],
   });
 
   // Create the session — tools flow through customTools + allowlist (see comment above).
@@ -800,6 +804,8 @@ async function ensureSession(): Promise<AgentSession> {
   }
   piSession = session;
   piSessionPromptOverride = systemPromptOverride;
+  piSessionCompactionFocus = compactionFocus;
+  session.agent.streamFunction = compactionFocus.wrap(session.agent.streamFunction);
 
   toolsChanged = false;
   debugLog(`Created Pi session: ${session.sessionId} (${wrappedAll.length} tools)`);
@@ -1497,10 +1503,13 @@ async function handlePrompt(msg: Extract<InboundMessage, { type: 'prompt' }>): P
 
     // Fire prompt — use followUp when session is already streaming so the
     // message is queued instead of throwing "Agent is already processing".
-    const prompt = () => session.prompt(msg.message, {
-      images: msg.images && msg.images.length > 0 ? msg.images : undefined,
-      streamingBehavior: 'followUp',
-    });
+    const prompt = () => {
+      piSessionCompactionFocus?.setEnabled(msg.autoCompactionFocus === 'puck');
+      return session.prompt(msg.message, {
+        images: msg.images && msg.images.length > 0 ? msg.images : undefined,
+        streamingBehavior: 'followUp',
+      });
+    };
     if (msg.ultraNonce !== undefined) {
       if (session.isStreaming || session.isCompacting || initConfig?.authType !== 'oauth' || initConfig.piAuth?.provider !== 'openai-codex' || initConfig.baseUrl || initConfig.customEndpoint || globalThis.fetch !== (globalThis as { craftInterceptedFetch?: unknown }).craftInterceptedFetch) throw new Error('Cannot safely start Ultrafast');
       const sol = piModelRegistry?.find('openai-codex', 'gpt-6.2-sol');

@@ -2268,6 +2268,7 @@ export class PiAgent extends BaseAgent {
       const turnId = `turn-${++this.rpcIdCounter}`;
       this.send({
         type: 'prompt',
+        autoCompactionFocus: this.config.getPiAutoCompactionFocus?.(),
         ultraNonce: options?.ultraNonce ?? (this.getModel() === 'pi/gpt-6.2-sol-ultrafast' ? 'unselected' : undefined),
         id: turnId,
         message: userMessage,
