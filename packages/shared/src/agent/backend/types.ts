@@ -269,6 +269,9 @@ export interface CoreBackendConfig {
   /** Auto-compact window in tokens (config.json `autoCompactWindow`), honored by Claude and Pi. Unset: each SDK's default (near the model's full window). */
   autoCompactWindow?: number;
 
+  /** Trusted host snapshot, evaluated on each Pi prompt dispatch. Omit for native compaction alone. */
+  getPiAutoCompactionFocus?: () => 'puck' | undefined;
+
   /**
    * Pre-computed source configurations for initial setup.
    * Passed at construction so backends can set up sources in postInit().

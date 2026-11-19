@@ -97,6 +97,7 @@ import { getCredentialManager, selectGrant, SecureStorageBackend, currentOAuthRe
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
 import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type BackgroundTaskOutput, type StopBackgroundTaskResult, type BoundPr, type PrMonitorState, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { launchOutputFile, readBackgroundTaskOutput } from './background-task-output'
+import { piAutoCompactionFocusForSession } from './pi-auto-compaction-focus'
 import { messageToStored, storedToMessage, withoutRetractedMessages, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
@@ -4416,6 +4417,7 @@ export class SessionManager implements ISessionManager {
         debugMode: _platform?.isDebugMode ? { enabled: true, logFilePath: _platform.getLogFilePath?.() } : undefined,
         enable1MContext: await (async () => { const { getEnable1MContext } = await import('@craft-agent/shared/config/storage'); return getEnable1MContext(); })(),
         autoCompactWindow: await (async () => { const { getAutoCompactWindow } = await import('@craft-agent/shared/config/storage'); return getAutoCompactWindow(); })(),
+        getPiAutoCompactionFocus: () => piAutoCompactionFocusForSession(managed),
         // Image resize callback — prevents oversized images from entering conversation history
         onImageResize: async (filePath: string, maxSizeBytes: number): Promise<string | null> => {
           try {
